@@ -39,12 +39,8 @@ const terrainSegments = 128; // Increased detail
 const geometry = new THREE.PlaneGeometry(terrainSize, terrainSize, terrainSegments, terrainSegments);
 geometry.rotateX(-Math.PI / 2); // Rotate to be horizontal
 
-// Add some initial random variation
+// Initialize with flat terrain (removed random variation)
 const positions = geometry.attributes.position;
-for (let i = 0; i < positions.count; i++) {
-    const y = Math.random() * 2 - 1; // Small random height variation
-    positions.setY(i, y);
-}
 geometry.computeVertexNormals(); // Compute normals after modification
 
 const material = new THREE.MeshStandardMaterial({
@@ -62,13 +58,15 @@ scene.add(terrain);
 // --- Controls ---
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true; // Smooth camera movement
-controls.dampingFactor = 0.05; // Reduced damping factor for smoother/slower zoom and pan
-controls.screenSpacePanning = false; // Panorthogonal to camera view direction
+controls.dampingFactor = 0.1; // Increased for more responsive damping
+controls.screenSpacePanning = true; // Better panning behavior
 controls.minDistance = 10;
-controls.maxDistance = 250; // Adjusted max distance
+controls.maxDistance = 150; // Reduced max distance for better control
 controls.maxPolarAngle = Math.PI / 2.1; // Prevent camera going below horizon
 controls.target.set(0, 0, 0);
-controls.zoomSpeed = 0.8; // Adjusted zoom speed
+controls.zoomSpeed = 0.5; // Reduced zoom speed for smoother zooming
+controls.rotateSpeed = 0.7; // More controlled rotation speed
+controls.panSpeed = 0.8; // Adjusted pan speed
 
 // --- Terrain Editing ---
 const raycaster = new THREE.Raycaster();
