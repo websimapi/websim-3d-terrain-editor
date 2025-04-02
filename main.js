@@ -329,22 +329,26 @@ function onWindowResize() {
 
 // Initialize the database connection and load terrain data
 async function initializeMultiplayer() {
-    await room.initialize();
-    myUsername = room.peers[room.clientId].username;
-    console.log(`Connected as: ${myUsername}`);
-    
-    // Initialize the terrain database module
-    terrainDB = new TerrainDatabase(room, geometry, scene);
-    await terrainDB.initialize();
-    
-    // Initialize player manager
-    playerManager = new PlayerManager(room, scene);
-    playerManager.initialize();
-    
-    // Update player position in real-time
-    setInterval(() => {
-        playerManager.updatePlayerPosition(camera, controls);
-    }, 100);
+    try {
+        await room.initialize();
+        myUsername = room.peers[room.clientId].username;
+        console.log(`Connected as: ${myUsername}`);
+        
+        // Initialize the terrain database module
+        terrainDB = new TerrainDatabase(room, geometry, scene);
+        await terrainDB.initialize();
+        
+        // Initialize player manager
+        playerManager = new PlayerManager(room, scene);
+        playerManager.initialize();
+        
+        // Update player position in real-time
+        setInterval(() => {
+            playerManager.updatePlayerPosition(camera, controls);
+        }, 100);
+    } catch (error) {
+        console.error('Error initializing multiplayer:', error);
+    }
 }
 
 // --- Animation Loop ---

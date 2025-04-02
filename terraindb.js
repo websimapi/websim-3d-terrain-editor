@@ -10,7 +10,7 @@ export class TerrainDatabase {
         this.lastSaveTime = 0;
         this.SAVE_THROTTLE = 2000;
         this.terrainData = null;
-        this.allTerrainChanges = {};
+        this.allTerrainChanges = {}; // Track both by ID and username
         this.myUsername = '';
         this.statusElement = document.getElementById('save-status');
         this.strokeStartTime = null;
@@ -46,10 +46,11 @@ export class TerrainDatabase {
             // Get all incremental changes after the snapshot
             let changes = [];
             if (snapshotTime) {
-                // Fixed: Use the proper filter query format
-                changes = await this.room.collection('terrainChange')
-                    .filter({ created_at: { $gt: snapshotTime.toISOString() } })
-                    .getList();
+                // Get all changes after the snapshot timestamp
+                changes = await this.room.collection('terrainChange').getList();
+                changes = changes.filter(change => 
+                    new Date(change.created_at) > snapshotTime
+                );
             } else {
                 changes = await this.room.collection('terrainChange').getList();
             }
@@ -71,12 +72,19 @@ export class TerrainDatabase {
             this.room.collection('terrainChange').subscribe((changes) => {
                 // Filter out own changes - we've already applied them locally
                 const otherChanges = changes.filter(change => 
-                    change.username !== this.myUsername
+                    change.username !== this.myUsername &&
+                    !this.allTerrainChanges[change.id] // Don't apply changes we've already processed
                 );
+                
                 if (otherChanges.length > 0) {
                     // Sort by creation time before applying
                     otherChanges.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
                     this.applyIncrementalChanges(otherChanges);
+                    
+                    // Track these changes to avoid reapplying
+                    otherChanges.forEach(change => {
+                        this.allTerrainChanges[change.id] = true;
+                    });
                 }
             });
             
@@ -102,6 +110,10 @@ export class TerrainDatabase {
             if (height !== undefined) {
                 positions.setY(i, height);
                 applied = true;
+                
+                // Update our cached terrain state
+                if (!this.terrainData) this.terrainData = {};
+                this.terrainData[i] = height;
             }
         }
         
@@ -134,13 +146,22 @@ export class TerrainDatabase {
                 
                 // Apply only the modified vertices
                 Object.entries(vertexChanges).forEach(([index, height]) => {
-                    positions.setY(parseInt(index), height);
+                    const intIndex = parseInt(index);
+                    positions.setY(intIndex, height);
                     vertexModified = true;
+                    
+                    // Update our cached terrain state
+                    if (!this.terrainData) this.terrainData = {};
+                    this.terrainData[intIndex] = height;
                 });
                 
-                // Cache this change by user
-                this.allTerrainChanges[change.username] = 
-                    this.allTerrainChanges[change.username] || [];
+                // Track this change to avoid reapplying
+                this.allTerrainChanges[change.id] = true;
+                
+                // For user-based analytics (optional)
+                if (!this.allTerrainChanges[change.username]) {
+                    this.allTerrainChanges[change.username] = [];
+                }
                 this.allTerrainChanges[change.username].push(change);
             } catch (error) {
                 console.error('Error applying terrain change:', error);
