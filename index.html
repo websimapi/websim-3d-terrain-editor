@@ -7,7 +7,7 @@
     <style>
         body { margin: 0; overflow: hidden; background-color: #222; color: white; font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; }
         canvas { display: block; }
-        #controls { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.7); padding: 15px; border-radius: 8px; z-index: 10; display: flex; flex-direction: column; gap: 10px; max-height: 80vh; overflow-y: auto; }
+        #controls { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.7); padding: 15px; border-radius: 8px; z-index: 10; display: flex; flex-direction: column; gap: 10px; }
         .control-group { display: flex; flex-direction: column; gap: 5px; }
         .control-group label { font-weight: bold; font-size: 0.9em; }
         .control-group input[type="range"] { width: 150px; cursor: pointer; }
@@ -23,12 +23,24 @@
         .color-swatch:hover { transform: scale(1.1); }
         .color-swatch.active { box-shadow: 0 0 0 2px white; transform: scale(1.1); }
         .color-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; }
-        .texture-swatch { background-size: cover; background-position: center; }
         #players-list { position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,0.7); padding: 15px; border-radius: 8px; z-index: 10; max-height: 300px; overflow-y: auto; }
         .player-item { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
         .player-avatar { width: 24px; height: 24px; border-radius: 50%; }
         .player-name { font-size: 0.9em; }
         #save-status { position: absolute; bottom: 10px; left: 10px; background: rgba(0,0,0,0.7); padding: 8px 15px; border-radius: 8px; font-size: 0.9em; opacity: 0; transition: opacity 0.3s ease; }
+        .generate-texture { display: flex; justify-content: center; align-items: center; color: white; font-weight: bold; }
+        .texture-swatch { background-size: cover; background-position: center; }
+        .texture-modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.8); }
+        .texture-modal-content { background-color: #333; margin: 10% auto; padding: 20px; width: 90%; max-width: 500px; border-radius: 8px; box-shadow: 0 0 20px rgba(0,0,0,0.5); }
+        .texture-modal-close { color: #aaa; float: right; font-size: 28px; font-weight: bold; cursor: pointer; }
+        .texture-modal-close:hover { color: white; }
+        .texture-preview-container { margin: 15px 0; border: 1px solid #555; border-radius: 4px; height: 220px; display: flex; justify-content: center; align-items: center; overflow: hidden; }
+        .texture-buttons { display: flex; justify-content: space-between; gap: 10px; }
+        .texture-buttons button { flex: 1; padding: 10px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        #generate-texture-btn { background-color: #4682B4; color: white; }
+        #save-texture-btn { background-color: #228B22; color: white; }
+        #texture-prompt { width: 100%; padding: 8px; background: #444; border: 1px solid #555; border-radius: 4px; color: white; }
+        #texture-loading { color: #ccc; font-style: italic; }
     </style>
 </head>
 <body>

@@ -9,8 +9,6 @@ export class ColorManager {
         this.colorChanges = {};
         this.terrainColors = {};
         this.statusElement = document.getElementById('save-status');
-        this.customTextures = {};
-        this.textureCache = {};
         
         // Color palette
         this.colorPalette = [
@@ -29,12 +27,32 @@ export class ColorManager {
         ];
         this.currentColor = this.colorPalette[0].hex;
         this.allColorChanges = {};
+        this.customTextures = [];
     }
 
     initializeColorPalette() {
         const swatchesContainer = document.getElementById('colorSwatches');
         swatchesContainer.innerHTML = ''; // Clear any existing swatches
         
+        // Add the custom texture button first
+        const generateButton = document.createElement('div');
+        generateButton.className = 'color-swatch generate-texture';
+        generateButton.style.background = 'linear-gradient(45deg, rgba(0,0,0,0.3) 25%, transparent 25%, transparent 50%, rgba(0,0,0,0.3) 50%, rgba(0,0,0,0.3) 75%, transparent 75%, transparent)';
+        generateButton.style.backgroundSize = '10px 10px';
+        generateButton.innerHTML = '<span style="font-size: 20px;">+</span>';
+        generateButton.title = 'Generate Custom Texture';
+        generateButton.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.showTextureGeneratorModal();
+        });
+        swatchesContainer.appendChild(generateButton);
+        
+        // Add custom textures
+        this.customTextures.forEach(texture => {
+            this.addTextureToSwatches(texture, swatchesContainer);
+        });
+        
+        // Add built-in color palette
         this.colorPalette.forEach(color => {
             const swatch = document.createElement('div');
             swatch.className = 'color-swatch';
@@ -64,7 +82,8 @@ export class ColorManager {
                 const event = new CustomEvent('colorChanged', {
                     detail: {
                         color: this.currentColor,
-                        name: color.name
+                        name: color.name,
+                        isTexture: false
                     }
                 });
                 document.dispatchEvent(event);
@@ -74,7 +93,206 @@ export class ColorManager {
         });
     }
 
-    // Ensure color attribute exists on geometry
+    addTextureToSwatches(texture, container) {
+        const swatch = document.createElement('div');
+        swatch.className = 'color-swatch texture-swatch';
+        swatch.style.backgroundImage = `url(${texture.url})`;
+        swatch.style.backgroundSize = 'cover';
+        swatch.title = texture.name;
+        swatch.dataset.textureUrl = texture.url;
+        
+        swatch.addEventListener('click', (e) => {
+            e.stopPropagation();
+            
+            // Update active swatch
+            document.querySelectorAll('.color-swatch').forEach(s => {
+                s.classList.remove('active');
+            });
+            swatch.classList.add('active');
+            
+            // Update current color/texture
+            this.currentColor = texture.url;
+            
+            // Trigger event for main.js to handle
+            const event = new CustomEvent('colorChanged', {
+                detail: {
+                    color: texture.url,
+                    name: texture.name,
+                    isTexture: true
+                }
+            });
+            document.dispatchEvent(event);
+        });
+        
+        if (container) {
+            // Insert after the generate button
+            const firstColor = container.querySelector('.color-swatch:not(.generate-texture)');
+            if (firstColor) {
+                container.insertBefore(swatch, firstColor);
+            } else {
+                container.appendChild(swatch);
+            }
+        }
+        
+        return swatch;
+    }
+
+    showTextureGeneratorModal() {
+        // Create modal if it doesn't exist
+        let modal = document.getElementById('texture-generator-modal');
+        if (!modal) {
+            modal = document.createElement('div');
+            modal.id = 'texture-generator-modal';
+            modal.className = 'texture-modal';
+            modal.innerHTML = `
+                <div class="texture-modal-content">
+                    <span class="texture-modal-close">&times;</span>
+                    <h2>Generate Custom Terrain Texture</h2>
+                    <p>Describe the terrain texture you want to generate:</p>
+                    <textarea id="texture-prompt" placeholder="e.g., Volcanic rock with lava flows" rows="3"></textarea>
+                    <div class="texture-preview-container">
+                        <img id="texture-preview" style="display: none; max-width: 100%;" />
+                        <div id="texture-loading" style="display: none;">Generating texture...</div>
+                    </div>
+                    <div class="texture-buttons">
+                        <button id="generate-texture-btn">Generate</button>
+                        <button id="save-texture-btn" disabled>Add to Palette</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+            
+            // Add event listeners
+            modal.querySelector('.texture-modal-close').addEventListener('click', () => {
+                modal.style.display = 'none';
+            });
+            
+            const generateBtn = document.getElementById('generate-texture-btn');
+            const saveBtn = document.getElementById('save-texture-btn');
+            const texturePreview = document.getElementById('texture-preview');
+            const textureLoading = document.getElementById('texture-loading');
+            
+            generateBtn.addEventListener('click', async () => {
+                const prompt = document.getElementById('texture-prompt').value.trim();
+                if (!prompt) {
+                    alert('Please enter a description for your texture');
+                    return;
+                }
+                
+                // Show loading state
+                generateBtn.disabled = true;
+                texturePreview.style.display = 'none';
+                textureLoading.style.display = 'block';
+                
+                try {
+                    // Generate the texture using the AI image generation API
+                    const enhancedPrompt = `A seamless top-down terrain texture showing ${prompt}. Tileable pattern for video game terrain, flat lighting, no shadows, overhead view`;
+                    const result = await websim.imageGen({
+                        prompt: enhancedPrompt,
+                        aspect_ratio: "1:1"
+                    });
+                    
+                    // Display the generated texture
+                    texturePreview.src = result.url;
+                    texturePreview.style.display = 'block';
+                    texturePreview.dataset.url = result.url;
+                    saveBtn.disabled = false;
+                } catch (error) {
+                    console.error('Error generating texture:', error);
+                    alert('Failed to generate texture. Please try again.');
+                } finally {
+                    textureLoading.style.display = 'none';
+                    generateBtn.disabled = false;
+                }
+            });
+            
+            saveBtn.addEventListener('click', async () => {
+                if (!texturePreview.dataset.url) return;
+                
+                const textureName = document.getElementById('texture-prompt').value.trim();
+                const textureUrl = texturePreview.dataset.url;
+                
+                // Add to custom textures array
+                const newTexture = {
+                    url: textureUrl,
+                    name: textureName
+                };
+                
+                this.customTextures.push(newTexture);
+                
+                // Add to swatches container
+                const swatchesContainer = document.getElementById('colorSwatches');
+                const newSwatch = this.addTextureToSwatches(newTexture, swatchesContainer);
+                
+                // Save to database
+                try {
+                    await this.saveCustomTexture(newTexture);
+                    // Close modal and select the new texture
+                    modal.style.display = 'none';
+                    newSwatch.click();
+                } catch (error) {
+                    console.error('Error saving custom texture:', error);
+                    alert('Failed to save the texture. Please try again.');
+                }
+            });
+        }
+        
+        // Reset the modal state
+        document.getElementById('texture-prompt').value = '';
+        document.getElementById('texture-preview').style.display = 'none';
+        document.getElementById('save-texture-btn').disabled = true;
+        
+        // Show the modal
+        modal.style.display = 'block';
+    }
+
+    async saveCustomTexture(texture) {
+        try {
+            await this.room.collection('customTextures').create({
+                url: texture.url,
+                name: texture.name,
+                timestamp: new Date().toISOString()
+            });
+            console.log('Custom texture saved to database');
+        } catch (error) {
+            console.error('Error saving custom texture:', error);
+            throw error;
+        }
+    }
+
+    async loadCustomTextures() {
+        try {
+            const textures = await this.room.collection('customTextures').getList();
+            
+            if (textures.length > 0) {
+                console.log(`Found ${textures.length} custom textures`);
+                
+                // Store custom textures
+                this.customTextures = textures.map(texture => ({
+                    url: texture.url,
+                    name: texture.name
+                }));
+                
+                // Refresh the color palette to include the textures
+                this.initializeColorPalette();
+            }
+            
+            // Subscribe to future additions
+            this.room.collection('customTextures').subscribe((textures) => {
+                // Update our list of textures when new ones are added
+                this.customTextures = textures.map(texture => ({
+                    url: texture.url,
+                    name: texture.name
+                }));
+                
+                // Refresh the palette
+                this.initializeColorPalette();
+            });
+        } catch (error) {
+            console.error('Error loading custom textures:', error);
+        }
+    }
+
     ensureColorAttribute() {
         if (!this.geometry.attributes.color) {
             const colors = new Float32Array(this.geometry.attributes.position.count * 3);
@@ -94,82 +312,6 @@ export class ColorManager {
         }
     }
 
-    // Apply custom texture as a color
-    applyTextureAsColor(textureUrl, name) {
-        // Create a new color palette entry for this texture
-        const textureId = `texture-${Date.now()}`;
-        this.customTextures[textureId] = {
-            url: textureUrl,
-            name: name || 'Custom Texture'
-        };
-        
-        // Add to palette
-        this.addTextureToColorPalette(textureId, textureUrl, name);
-        
-        // Switch to texture
-        this.currentColor = textureId;
-        
-        // Trigger event for main.js to handle
-        const event = new CustomEvent('colorChanged', {
-            detail: {
-                color: textureId,
-                name: name,
-                isTexture: true,
-                textureUrl: textureUrl
-            }
-        });
-        document.dispatchEvent(event);
-    }
-    
-    addTextureToColorPalette(textureId, textureUrl, name) {
-        const swatchesContainer = document.getElementById('colorSwatches');
-        
-        // Create texture swatch
-        const swatch = document.createElement('div');
-        swatch.className = 'color-swatch texture-swatch';
-        swatch.style.backgroundImage = `url(${textureUrl})`;
-        swatch.style.backgroundSize = 'cover';
-        swatch.style.backgroundPosition = 'center';
-        swatch.title = name || 'Custom Texture';
-        swatch.dataset.color = textureId;
-        swatch.dataset.isTexture = 'true';
-        swatch.dataset.textureUrl = textureUrl;
-        
-        // Mark as active
-        document.querySelectorAll('.color-swatch').forEach(s => {
-            s.classList.remove('active');
-        });
-        swatch.classList.add('active');
-        
-        swatch.addEventListener('click', (e) => {
-            // Prevent brush application when clicking color
-            e.stopPropagation();
-            
-            // Update active swatch
-            document.querySelectorAll('.color-swatch').forEach(s => {
-                s.classList.remove('active');
-            });
-            swatch.classList.add('active');
-            
-            // Update current color
-            this.currentColor = textureId;
-            
-            // Trigger event for main.js to handle
-            const event = new CustomEvent('colorChanged', {
-                detail: {
-                    color: textureId,
-                    name: name,
-                    isTexture: true,
-                    textureUrl: textureUrl
-                }
-            });
-            document.dispatchEvent(event);
-        });
-        
-        swatchesContainer.appendChild(swatch);
-    }
-
-    // Apply color to terrain with brush effect
     applyColorBrush(hitPoint, brushRadius, brushStrength) {
         this.ensureColorAttribute();
         
@@ -190,36 +332,22 @@ export class ColorManager {
                 // Smoother falloff using cosine function
                 const falloff = Math.cos((distance / brushRadius) * Math.PI / 2);
                 
-                // Check if this is a texture or a solid color
-                if (this.currentColor.startsWith('texture-') && this.customTextures[this.currentColor]) {
-                    // Store the texture ID for this vertex
-                    this.colorChanges[i] = this.currentColor;
-                    
-                    // Apply a distinctive color to show texture application in real-time
-                    const blendFactor = falloff * (brushStrength / 5);
-                    const hue = (Date.now() / 3000) % 1; // Shift hue over time for visual feedback
-                    const color = new THREE.Color().setHSL(hue, 0.8, 0.6);
-                    
-                    // Apply the color
-                    colorAttribute.setXYZ(i, color.r, color.g, color.b);
-                } else {
-                    // Apply color with falloff for blending
-                    const color = new THREE.Color(this.currentColor);
-                    
-                    // If we already have a color, blend with existing
-                    const existingColor = new THREE.Color();
-                    existingColor.fromBufferAttribute(colorAttribute, i);
-                    
-                    // Lerp between existing and new color based on falloff and strength
-                    const blendFactor = falloff * (brushStrength / 5);
-                    existingColor.lerp(color, blendFactor);
-                    
-                    // Apply the color
-                    colorAttribute.setXYZ(i, existingColor.r, existingColor.g, existingColor.b);
-                    
-                    // Store the color change for database
-                    this.colorChanges[i] = '#' + existingColor.getHexString();
-                }
+                // Apply color with falloff for blending
+                const color = new THREE.Color(this.currentColor);
+                
+                // If we already have a color, blend with existing
+                const existingColor = new THREE.Color();
+                existingColor.fromBufferAttribute(colorAttribute, i);
+                
+                // Lerp between existing and new color based on falloff and strength
+                const blendFactor = falloff * (brushStrength / 5);
+                existingColor.lerp(color, blendFactor);
+                
+                // Apply the color
+                colorAttribute.setXYZ(i, existingColor.r, existingColor.g, existingColor.b);
+                
+                // Store the color change for database
+                this.colorChanges[i] = '#' + existingColor.getHexString();
                 
                 colorModified = true;
             }
@@ -234,7 +362,6 @@ export class ColorManager {
         return false;
     }
 
-    // Save color changes to database
     async saveColorChanges() {
         if (Object.keys(this.colorChanges).length === 0) return;
         
@@ -244,10 +371,9 @@ export class ColorManager {
             // Update our local state
             this.terrainColors = {...this.terrainColors, ...this.colorChanges};
             
-            // Save color data to database, including textures
+            // Save color data to database
             await this.room.collection('terrainColorData').create({
                 colorData: this.colorChanges,
-                customTextures: this.customTextures,
                 changeCount: Object.keys(this.colorChanges).length,
                 timestamp: new Date().toISOString()
             });
@@ -265,23 +391,10 @@ export class ColorManager {
         }
     }
 
-    // Apply color data loaded from database
-    applyColorDataToTerrain(colorData, customTexturesData) {
+    applyColorDataToTerrain(colorData) {
         if (!colorData || typeof colorData !== 'object') {
             console.error('Invalid color data:', colorData);
             return;
-        }
-        
-        // Store textures if they exist
-        if (customTexturesData && typeof customTexturesData === 'object') {
-            this.customTextures = {...this.customTextures, ...customTexturesData};
-            
-            // Add textures to the palette UI
-            Object.entries(customTexturesData).forEach(([id, textureInfo]) => {
-                if (!document.querySelector(`.color-swatch[data-color="${id}"]`)) {
-                    this.addTextureToColorPalette(id, textureInfo.url, textureInfo.name);
-                }
-            });
         }
         
         // Store colors locally
@@ -293,71 +406,28 @@ export class ColorManager {
         // Update colors based on received data
         const colorAttribute = this.geometry.attributes.color;
         let colorModified = false;
-        let hasTextures = false;
         
-        for (const [vertexIndex, colorValue] of Object.entries(colorData)) {
+        for (const [vertexIndex, colorHex] of Object.entries(colorData)) {
             const i = parseInt(vertexIndex);
             if (isNaN(i) || i < 0 || i >= colorAttribute.count) continue;
             
-            // Handle texture IDs differently
-            if (typeof colorValue === 'string' && colorValue.startsWith('texture-')) {
-                hasTextures = true;
-                if (this.customTextures[colorValue]) {
-                    // Use a special color to represent the texture
-                    const color = new THREE.Color(0.9, 0.4, 0.8); // Bright magenta for textures
-                    colorAttribute.setXYZ(i, color.r, color.g, color.b);
-                }
-            } else {
-                // Regular color handling
-                const color = new THREE.Color(colorValue);
-                colorAttribute.setXYZ(i, color.r, color.g, color.b);
-            }
+            // Convert hex to RGB (0-1 range)
+            const color = new THREE.Color(colorHex);
+            colorAttribute.setXYZ(i, color.r, color.g, color.b);
             colorModified = true;
         }
         
         if (colorModified) {
             colorAttribute.needsUpdate = true;
             console.log('Applied color data to terrain');
-            
-            // If we have textures, update the material to handle them
-            if (hasTextures) {
-                this.setupTexturedMaterial();
-            }
         }
-    }
-    
-    // Setup a special material that can handle textures
-    setupTexturedMaterial() {
-        // Ensure the terrain mesh is available
-        if (!this.terrainMesh) {
-            console.error('Terrain mesh not found');
-            return;
-        }
-        
-        // Check if we already have textures loaded
-        const textureIds = Object.keys(this.customTextures).filter(id => 
-            id.startsWith('texture-')
-        );
-        
-        if (textureIds.length === 0) return;
-        
-        // Pre-load textures
-        textureIds.forEach(id => {
-            const textureInfo = this.customTextures[id];
-            if (textureInfo && textureInfo.url && !this.textureCache[id]) {
-                const texture = new THREE.TextureLoader().load(textureInfo.url);
-                texture.wrapS = THREE.RepeatWrapping;
-                texture.wrapT = THREE.RepeatWrapping;
-                this.textureCache[id] = texture;
-            }
-        });
-        
-        console.log(`Loaded ${Object.keys(this.textureCache).length} textures for terrain`);
     }
 
-    // Initialize color data from database
     async loadColorData() {
         try {
+            // Load custom textures first
+            await this.loadCustomTextures();
+            
             // Try to load color data
             const colorData = await this.room.collection('terrainColorData').getList();
             if (colorData.length > 0) {
@@ -366,7 +436,7 @@ export class ColorManager {
                 )[0];
                 
                 console.log('Found terrain color data from:', new Date(latestColorData.created_at));
-                this.applyColorDataToTerrain(latestColorData.colorData, latestColorData.customTextures);
+                this.applyColorDataToTerrain(latestColorData.colorData);
                 
                 // Track all applied color changes
                 colorData.forEach(change => {
@@ -384,7 +454,7 @@ export class ColorManager {
                     
                     // Apply color changes if we haven't seen them before
                     if (!this.allColorChanges[latestColorChange.id]) {
-                        this.applyColorDataToTerrain(latestColorChange.colorData, latestColorChange.customTextures);
+                        this.applyColorDataToTerrain(latestColorChange.colorData);
                         this.allColorChanges[latestColorChange.id] = true;
                     }
                 }
@@ -394,7 +464,6 @@ export class ColorManager {
         }
     }
 
-    // Show save status indicator
     showSaveStatus(isVisible, isError = false) {
         if (!this.statusElement) return;
         

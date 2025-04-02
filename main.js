@@ -3,7 +3,6 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TerrainDatabase } from './terraindb.js';
 import { PlayerManager } from './players.js';
 import { ColorManager } from './colorManager.js';
-import { TextureGenerator } from './textureGenerator.js';
 
 // Room setup for multiplayer
 const room = new WebsimSocket();
@@ -345,15 +344,33 @@ function onWindowResize() {
 }
 
 document.addEventListener('colorChanged', (event) => {
-    const { color, name } = event.detail;
+    const { color, name, isTexture } = event.detail;
     // Switch to color tool automatically
     currentTool = 'color';
     updateActiveButton();
     
     // Update brush indicator color
-    brushIndicator.material.color.set(color);
-    brushIndicator.material.wireframe = false;
-    brushIndicator.material.opacity = 0.6;
+    if (isTexture) {
+        // Create a canvas texture for the brush indicator
+        const loader = new THREE.TextureLoader();
+        loader.load(color, (texture) => {
+            const mat = brushIndicator.material;
+            if (mat.map) mat.map.dispose();
+            mat.map = texture;
+            mat.needsUpdate = true;
+            mat.wireframe = false;
+            mat.opacity = 0.8;
+        });
+    } else {
+        // Reset to regular color
+        if (brushIndicator.material.map) {
+            brushIndicator.material.map.dispose();
+            brushIndicator.material.map = null;
+        }
+        brushIndicator.material.color.set(color);
+        brushIndicator.material.wireframe = false;
+        brushIndicator.material.opacity = 0.6;
+    }
 });
 
 // Initialize the database connection and load terrain data
@@ -371,13 +388,6 @@ async function initializeMultiplayer() {
         colorManager = new ColorManager(room, geometry, scene);
         colorManager.initializeColorPalette();
         await colorManager.loadColorData();
-        
-        // Setup material to handle textures after loading data
-        colorManager.setupTexturedMaterial();
-        
-        // Initialize texture generator
-        const textureGenerator = new TextureGenerator(colorManager);
-        await textureGenerator.initialize();
         
         // Initialize player manager
         playerManager = new PlayerManager(room, scene);
