@@ -14,6 +14,7 @@ export class TerrainDatabase {
         this.myUsername = '';
         this.statusElement = document.getElementById('save-status');
         this.strokeStartTime = null;
+        this.userRowId = null; // Store the user's row ID
     }
 
     async initialize() {
@@ -43,55 +44,82 @@ export class TerrainDatabase {
                 this.applyHeightDataToTerrain(baseHeightData);
             }
             
-            // Get all incremental changes after the snapshot
-            const changes = await this.room.collection('terrainChange').getList();
-            let changesAfterSnapshot = changes;
-            if (snapshotTime) {
-                // Get all changes after the snapshot timestamp
-                changesAfterSnapshot = changes.filter(change => 
-                    new Date(change.created_at) > snapshotTime
-                );
-            }
-                
-            if (changesAfterSnapshot.length > 0) {
-                console.log(`Applying ${changesAfterSnapshot.length} changes after snapshot`);
-                // Sort changes chronologically before applying
-                changesAfterSnapshot.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
-                this.applyIncrementalChanges(changesAfterSnapshot);
+            // Get all users' terrain changes
+            const userTerrainRows = await this.room.collection('userTerrain').getList();
+            
+            // Find this user's row or create if it doesn't exist
+            let userRow = userTerrainRows.find(row => row.username === this.myUsername);
+            
+            if (userRow) {
+                console.log(`Found existing terrain row for user ${this.myUsername}`);
+                this.userRowId = userRow.id;
+            } else {
+                console.log(`Creating new terrain row for user ${this.myUsername}`);
+                userRow = await this.room.collection('userTerrain').create({
+                    changes: {},
+                    lastModified: new Date().toISOString()
+                });
+                this.userRowId = userRow.id;
             }
             
-            // Store all change IDs we've applied
-            changes.forEach(change => {
-                this.allTerrainChanges[change.id] = true;
-            });
-            
-            // Subscribe to future terrain changes
-            this.room.collection('terrainChange').subscribe((changes) => {
-                // Filter out changes we've already processed
-                const newChanges = changes.filter(change => 
-                    !this.allTerrainChanges[change.id]
-                );
-                
-                if (newChanges.length > 0) {
-                    // Sort by creation time before applying
-                    newChanges.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
-                    this.applyIncrementalChanges(newChanges);
-                    
-                    // Track these changes to avoid reapplying
-                    newChanges.forEach(change => {
-                        this.allTerrainChanges[change.id] = true;
-                    });
+            // Apply all users' changes
+            userTerrainRows.forEach(row => {
+                if (row.changes && Object.keys(row.changes).length > 0) {
+                    this.applyUserChanges(row.changes);
                 }
             });
             
+            // Subscribe to changes in the userTerrain collection
+            this.room.collection('userTerrain').subscribe((rows) => {
+                // Process each user's changes
+                rows.forEach(row => {
+                    // Skip our own row as we manage it directly
+                    if (row.id === this.userRowId) return;
+                    
+                    // Apply the changes from other users
+                    if (row.changes) {
+                        this.applyUserChanges(row.changes);
+                    }
+                });
+            });
+            
             // If no data exists, create a flat terrain as the first snapshot
-            if (!baseHeightData && changesAfterSnapshot.length === 0) {
+            if (!baseHeightData && userTerrainRows.length === 0) {
                 console.log('No existing terrain data, creating flat terrain snapshot');
                 await this.createFlatTerrainSnapshot();
             }
             
         } catch (error) {
             console.error('Error loading terrain data:', error);
+        }
+    }
+    
+    // Apply a user's changes to the terrain
+    applyUserChanges(changes) {
+        if (!changes || Object.keys(changes).length === 0) return;
+        
+        const positions = this.geometry.attributes.position;
+        let vertexModified = false;
+        
+        // Apply the vertex changes to our terrain
+        try {
+            // Apply only the modified vertices
+            Object.entries(changes).forEach(([index, height]) => {
+                const intIndex = parseInt(index);
+                positions.setY(intIndex, height);
+                vertexModified = true;
+                
+                // Update our cached terrain state
+                if (!this.terrainData) this.terrainData = {};
+                this.terrainData[intIndex] = height;
+            });
+        } catch (error) {
+            console.error('Error applying terrain change:', error);
+        }
+        
+        if (vertexModified) {
+            positions.needsUpdate = true;
+            this.geometry.computeVertexNormals();
         }
     }
     
@@ -125,51 +153,6 @@ export class TerrainDatabase {
             console.log('Applied complete height data to terrain');
         } else {
             console.warn('No height data was applied to the terrain');
-        }
-    }
-    
-    // Apply a series of incremental changes
-    applyIncrementalChanges(changes) {
-        if (!changes || changes.length === 0) return;
-        
-        const positions = this.geometry.attributes.position;
-        let vertexModified = false;
-        
-        // Process each change
-        changes.forEach(change => {
-            if (!change.changes) {
-                console.warn('Change record has no changes property:', change);
-                return;
-            }
-            
-            // Apply the vertex changes to our terrain
-            try {
-                const vertexChanges = change.changes;
-                
-                // Apply only the modified vertices
-                Object.entries(vertexChanges).forEach(([index, height]) => {
-                    const intIndex = parseInt(index);
-                    positions.setY(intIndex, height);
-                    vertexModified = true;
-                    
-                    // Update our cached terrain state
-                    if (!this.terrainData) this.terrainData = {};
-                    this.terrainData[intIndex] = height;
-                });
-                
-                // Track this change to avoid reapplying
-                this.allTerrainChanges[change.id] = true;
-            } catch (error) {
-                console.error('Error applying terrain change:', error);
-            }
-        });
-        
-        if (vertexModified) {
-            positions.needsUpdate = true;
-            this.geometry.computeVertexNormals();
-            console.log(`Applied ${changes.length} incremental changes`);
-        } else {
-            console.warn('No changes were applied to the terrain');
         }
     }
     
@@ -214,13 +197,44 @@ export class TerrainDatabase {
                 // Use current time as stroke start if none set
                 const strokeStartTime = this.strokeStartTime || new Date().toISOString();
                 
-                // Save just the changes (not the entire terrain) for efficiency
-                await this.room.collection('terrainChange').create({
-                    changes: changedVertices,
-                    changeCount: changeCount,
-                    strokeStartTime: strokeStartTime,
-                    strokeEndTime: strokeEndTime
-                });
+                if (this.userRowId) {
+                    // Get the current user row
+                    let userRow = await this.room.collection('userTerrain').filter({id: this.userRowId}).getList();
+                    
+                    if (userRow && userRow.length > 0) {
+                        // Update existing row with merged changes
+                        const existingChanges = userRow[0].changes || {};
+                        const mergedChanges = {...existingChanges, ...changedVertices};
+                        
+                        await this.room.collection('userTerrain').update(this.userRowId, {
+                            changes: mergedChanges,
+                            changeCount: Object.keys(mergedChanges).length,
+                            lastModified: new Date().toISOString(),
+                            strokeStartTime: strokeStartTime,
+                            strokeEndTime: strokeEndTime
+                        });
+                    } else {
+                        console.warn("User row not found, creating a new one");
+                        const newRow = await this.room.collection('userTerrain').create({
+                            changes: changedVertices,
+                            changeCount: changeCount,
+                            lastModified: new Date().toISOString(),
+                            strokeStartTime: strokeStartTime,
+                            strokeEndTime: strokeEndTime
+                        });
+                        this.userRowId = newRow.id;
+                    }
+                } else {
+                    // Create a new row for this user
+                    const newRow = await this.room.collection('userTerrain').create({
+                        changes: changedVertices,
+                        changeCount: changeCount,
+                        lastModified: new Date().toISOString(),
+                        strokeStartTime: strokeStartTime,
+                        strokeEndTime: strokeEndTime
+                    });
+                    this.userRowId = newRow.id;
+                }
                 
                 // Periodically save a full snapshot for faster loading
                 // Store a count of our changes

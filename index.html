@@ -28,19 +28,6 @@
         .player-avatar { width: 24px; height: 24px; border-radius: 50%; }
         .player-name { font-size: 0.9em; }
         #save-status { position: absolute; bottom: 10px; left: 10px; background: rgba(0,0,0,0.7); padding: 8px 15px; border-radius: 8px; font-size: 0.9em; opacity: 0; transition: opacity 0.3s ease; }
-        .generate-texture { display: flex; justify-content: center; align-items: center; color: white; font-weight: bold; }
-        .texture-swatch { background-size: cover; background-position: center; }
-        .texture-modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.8); }
-        .texture-modal-content { background-color: #333; margin: 10% auto; padding: 20px; width: 90%; max-width: 500px; border-radius: 8px; box-shadow: 0 0 20px rgba(0,0,0,0.5); }
-        .texture-modal-close { color: #aaa; float: right; font-size: 28px; font-weight: bold; cursor: pointer; }
-        .texture-modal-close:hover { color: white; }
-        .texture-preview-container { margin: 15px 0; border: 1px solid #555; border-radius: 4px; height: 220px; display: flex; justify-content: center; align-items: center; overflow: hidden; }
-        .texture-buttons { display: flex; justify-content: space-between; gap: 10px; }
-        .texture-buttons button { flex: 1; padding: 10px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }
-        #generate-texture-btn { background-color: #4682B4; color: white; }
-        #save-texture-btn { background-color: #228B22; color: white; }
-        #texture-prompt { width: 100%; padding: 8px; background: #444; border: 1px solid #555; border-radius: 4px; color: white; }
-        #texture-loading { color: #ccc; font-style: italic; }
     </style>
 </head>
 <body>
@@ -106,7 +93,6 @@
     </script>
     <script type="module" src="main.js"></script>
     <script type="module" src="terraindb.js"></script>
-    <script type="module" src="corsProxyHandler.js"></script>
 <script defer src="https://static.cloudflareinsights.com/beacon.min.js/v8c78df7c7c0f484497ecbca7046644da1771523124516" integrity="sha512-8DS7rgIrAmghBFwoOTujcf6D9rXvH8xm8JQ1Ja01h9QX8EzXldiszufYa4IFfKdLUKTTrnSFXLDkUEOTrZQ8Qg==" data-cf-beacon='{"version":"2024.11.0","token":"4c6229722a6346bc8eb5cb0e5eae5d41","server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
 </body>
 </html>

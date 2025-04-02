@@ -324,47 +324,13 @@ function updateBrushIndicator() {
         
         // Update color for paint brush
         if (currentTool === 'color' && colorManager) {
-            const isTextureUrl = colorManager.textureHandler.isTextureUrl(colorManager.currentColor);
-            
-            if (isTextureUrl) {
-                // Load the texture using the texture handler (which handles proxies)
-                colorManager.textureHandler.loadTexture(colorManager.currentColor)
-                    .then(texture => {
-                        if (brushIndicator.material.map) {
-                            brushIndicator.material.map.dispose();
-                        }
-                        brushIndicator.material.map = texture;
-                        brushIndicator.material.color.set(0xFFFFFF);
-                        brushIndicator.material.wireframe = false;
-                        brushIndicator.material.opacity = 0.6;
-                        brushIndicator.material.needsUpdate = true;
-                    })
-                    .catch(error => {
-                        console.error('Error applying texture to brush:', error);
-                        // Fallback
-                        brushIndicator.material.color.set(0xFFFFFF);
-                        brushIndicator.material.wireframe = true;
-                    });
-            } else {
-                // Reset to regular color
-                if (brushIndicator.material.map) {
-                    brushIndicator.material.map.dispose();
-                    brushIndicator.material.map = null;
-                }
-                brushIndicator.material.color.set(colorManager.currentColor);
-                brushIndicator.material.wireframe = false;
-                brushIndicator.material.opacity = 0.6;
-                brushIndicator.material.needsUpdate = true;
-            }
+            brushIndicator.material.color.set(colorManager.currentColor);
+            brushIndicator.material.wireframe = false;
+            brushIndicator.material.opacity = 0.6;
         } else {
             brushIndicator.material.color.set(0xffffff);
             brushIndicator.material.wireframe = true;
             brushIndicator.material.opacity = 0.5;
-            if (brushIndicator.material.map) {
-                brushIndicator.material.map.dispose();
-                brushIndicator.material.map = null;
-            }
-            brushIndicator.material.needsUpdate = true;
         }
     } else {
         brushIndicator.visible = false;
@@ -378,33 +344,15 @@ function onWindowResize() {
 }
 
 document.addEventListener('colorChanged', (event) => {
-    const { color, name, isTexture } = event.detail;
+    const { color, name } = event.detail;
     // Switch to color tool automatically
     currentTool = 'color';
     updateActiveButton();
     
     // Update brush indicator color
-    if (isTexture) {
-        // Create a canvas texture for the brush indicator
-        const loader = new THREE.TextureLoader();
-        loader.load(color, (texture) => {
-            const mat = brushIndicator.material;
-            if (mat.map) mat.map.dispose();
-            mat.map = texture;
-            mat.needsUpdate = true;
-            mat.wireframe = false;
-            mat.opacity = 0.8;
-        });
-    } else {
-        // Reset to regular color
-        if (brushIndicator.material.map) {
-            brushIndicator.material.map.dispose();
-            brushIndicator.material.map = null;
-        }
-        brushIndicator.material.color.set(color);
-        brushIndicator.material.wireframe = false;
-        brushIndicator.material.opacity = 0.6;
-    }
+    brushIndicator.material.color.set(color);
+    brushIndicator.material.wireframe = false;
+    brushIndicator.material.opacity = 0.6;
 });
 
 // Initialize the database connection and load terrain data
