@@ -112,7 +112,7 @@ function onMouseWheel(event) {
 const raycaster = new THREE.Raycaster();
 const mouse = new THREE.Vector2();
 let isMouseDown = false;
-let currentTool = 'raise'; // 'raise', 'lower', 'flatten'
+let currentTool = 'raise'; // 'select', 'raise', 'lower', 'flatten'
 const brushIndicator = new THREE.Mesh(
     new THREE.SphereGeometry(1, 16, 8),
     new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, opacity: 0.5, transparent: true })
@@ -195,10 +195,13 @@ function onPointerDownTerrain(event) {
     if (event.button !== 0) return;
 
     isMouseDown = true;
-    controls.enabled = false; // Disable camera controls while editing
-    // Ensure brush indicator updates immediately on click
-    updateBrushIndicator();
-    applyBrush(); // Apply brush on the first click
+    // Only disable camera controls when not in selection mode
+    if (currentTool !== 'select') {
+        controls.enabled = false; // Disable camera controls while editing
+        // Ensure brush indicator updates immediately on click
+        updateBrushIndicator();
+        applyBrush(); // Apply brush on the first click
+    }
 }
 
 // Renamed handler for clarity
@@ -221,7 +224,8 @@ function updateBrushIndicator() {
         brushIndicator.position.copy(intersection.point);
         const scale = parseFloat(brushSizeSlider.value) * 0.2; // Adjust scaling factor as needed
         brushIndicator.scale.set(scale, scale, scale);
-        brushIndicator.visible = true;
+        // Only show brush indicator for non-selection tools
+        brushIndicator.visible = (currentTool !== 'select');
     } else {
         brushIndicator.visible = false;
     }

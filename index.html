@@ -12,9 +12,10 @@
         .control-group label { font-weight: bold; font-size: 0.9em; }
         .control-group input[type="range"] { width: 150px; cursor: pointer; }
         .button-group { display: flex; gap: 5px; margin-top: 5px;}
-        .button-group button { padding: 8px 12px; cursor: pointer; border: none; border-radius: 4px; background-color: #555; color: white; transition: background-color 0.2s ease; }
+        .button-group button { padding: 8px 12px; cursor: pointer; border: none; border-radius: 4px; background-color: #555; color: white; transition: background-color 0.2s ease; display: flex; align-items: center; gap: 5px; }
         .button-group button.active { background-color: #4682B4; /* Steel Blue */ box-shadow: 0 0 5px #4682B4; }
         .button-group button:hover:not(.active) { background-color: #777; }
+        .tool-icon { width: 16px; height: 16px; fill: white; }
         .slider-value { font-size: 0.8em; color: #ccc; margin-left: 5px; }
         #flattenHeightControl { display: none; /* Initially hidden */ }
     </style>
@@ -32,9 +33,30 @@
         <div class="control-group">
             <label>Tool:</label>
             <div class="button-group">
-                <button id="raiseBtn" class="active" data-tool="raise">Raise</button>
-                <button id="lowerBtn" data-tool="lower">Lower</button>
-                <button id="flattenBtn" data-tool="flatten">Flatten</button>
+                <button id="selectionBtn" data-tool="select">
+                    <svg class="tool-icon" viewBox="0 0 24 24">
+                        <path d="M7,2l12,11.2l-5.8,0.5l3.3,7.3l-2.2,1l-3.2-7.4L7,18.5V2"/>
+                    </svg>
+                    Select
+                </button>
+                <button id="raiseBtn" class="active" data-tool="raise">
+                    <svg class="tool-icon" viewBox="0 0 24 24">
+                        <path d="M12,20V10.8l5.5,5.5l1.42-1.42L12,8L5.08,14.92l1.42,1.42L12,10.8V20z"/>
+                    </svg>
+                    Raise
+                </button>
+                <button id="lowerBtn" data-tool="lower">
+                    <svg class="tool-icon" viewBox="0 0 24 24">
+                        <path d="M12,4v9.2l-5.5-5.5L5.08,9.12L12,16l6.92-6.92l-1.42-1.42L12,13.2V4z"/>
+                    </svg>
+                    Lower
+                </button>
+                <button id="flattenBtn" data-tool="flatten">
+                    <svg class="tool-icon" viewBox="0 0 24 24">
+                        <path d="M5,11h14v2H5z"/>
+                    </svg>
+                    Flatten
+                </button>
             </div>
         </div>
          <div class="control-group" id="flattenHeightControl">
