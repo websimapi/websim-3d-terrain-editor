@@ -324,12 +324,27 @@ function updateBrushIndicator() {
         
         // Update color for paint brush
         if (currentTool === 'color' && colorManager) {
-            const isTextureUrl = typeof colorManager.currentColor === 'string' && 
-                                 (colorManager.currentColor.startsWith('http') || 
-                                  colorManager.currentColor.startsWith('data:image'));
+            const isTextureUrl = colorManager.textureHandler.isTextureUrl(colorManager.currentColor);
             
             if (isTextureUrl) {
-                colorManager.textureHandler.applyToMaterial(brushIndicator.material, colorManager.currentColor);
+                // Load the texture using the texture handler (which handles proxies)
+                colorManager.textureHandler.loadTexture(colorManager.currentColor)
+                    .then(texture => {
+                        if (brushIndicator.material.map) {
+                            brushIndicator.material.map.dispose();
+                        }
+                        brushIndicator.material.map = texture;
+                        brushIndicator.material.color.set(0xFFFFFF);
+                        brushIndicator.material.wireframe = false;
+                        brushIndicator.material.opacity = 0.6;
+                        brushIndicator.material.needsUpdate = true;
+                    })
+                    .catch(error => {
+                        console.error('Error applying texture to brush:', error);
+                        // Fallback
+                        brushIndicator.material.color.set(0xFFFFFF);
+                        brushIndicator.material.wireframe = true;
+                    });
             } else {
                 // Reset to regular color
                 if (brushIndicator.material.map) {
@@ -339,13 +354,17 @@ function updateBrushIndicator() {
                 brushIndicator.material.color.set(colorManager.currentColor);
                 brushIndicator.material.wireframe = false;
                 brushIndicator.material.opacity = 0.6;
+                brushIndicator.material.needsUpdate = true;
             }
-            brushIndicator.material.wireframe = false;
-            brushIndicator.material.opacity = 0.6;
         } else {
             brushIndicator.material.color.set(0xffffff);
             brushIndicator.material.wireframe = true;
             brushIndicator.material.opacity = 0.5;
+            if (brushIndicator.material.map) {
+                brushIndicator.material.map.dispose();
+                brushIndicator.material.map = null;
+            }
+            brushIndicator.material.needsUpdate = true;
         }
     } else {
         brushIndicator.visible = false;
@@ -366,43 +385,25 @@ document.addEventListener('colorChanged', (event) => {
     
     // Update brush indicator color
     if (isTexture) {
-        try {
-            // Create a texture for the brush indicator using the TextureHandler
-            colorManager.textureHandler.loadTexture(color).then(texture => {
-                const mat = brushIndicator.material;
-                if (mat.map) mat.map.dispose();
-                mat.map = texture;
-                mat.needsUpdate = true;
-                mat.wireframe = false;
-                mat.opacity = 0.8;
-            }).catch(err => {
-                console.warn("Failed to load texture for brush indicator:", err);
-                // Reset to default on error
-                brushIndicator.material.color.set(0x888888);
-                brushIndicator.material.wireframe = false;
-                brushIndicator.material.opacity = 0.6;
-            });
-        } catch (err) {
-            console.warn("Error setting up brush texture:", err);
-            // Use default fallback
-            brushIndicator.material.color.set(0x888888);
-            brushIndicator.material.wireframe = false;
-            brushIndicator.material.opacity = 0.6;
-        }
+        // Create a canvas texture for the brush indicator
+        const loader = new THREE.TextureLoader();
+        loader.load(color, (texture) => {
+            const mat = brushIndicator.material;
+            if (mat.map) mat.map.dispose();
+            mat.map = texture;
+            mat.needsUpdate = true;
+            mat.wireframe = false;
+            mat.opacity = 0.8;
+        });
     } else {
         // Reset to regular color
-        try {
-            if (brushIndicator.material.map) {
-                brushIndicator.material.map.dispose();
-                brushIndicator.material.map = null;
-            }
-            brushIndicator.material.color.set(color);
-            brushIndicator.material.wireframe = false;
-            brushIndicator.material.opacity = 0.6;
-        } catch (err) {
-            console.warn("Error setting brush color:", err);
-            brushIndicator.material.color.set(0x888888);
+        if (brushIndicator.material.map) {
+            brushIndicator.material.map.dispose();
+            brushIndicator.material.map = null;
         }
+        brushIndicator.material.color.set(color);
+        brushIndicator.material.wireframe = false;
+        brushIndicator.material.opacity = 0.6;
     }
 });
 

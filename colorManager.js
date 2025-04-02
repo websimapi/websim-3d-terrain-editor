@@ -194,21 +194,10 @@ export class ColorManager {
                         aspect_ratio: "1:1"
                     });
                     
-                    // Try to upload the image to websim storage to avoid CORS issues
-                    let textureUrl = result.url;
-                    try {
-                        const response = await fetch(result.url);
-                        const blob = await response.blob();
-                        const file = new File([blob], 'texture.jpg', { type: 'image/jpeg' });
-                        textureUrl = await websim.upload(file);
-                    } catch (err) {
-                        console.warn('Could not upload texture to websim storage, using original URL', err);
-                    }
-                    
                     // Display the generated texture
-                    texturePreview.src = textureUrl;
+                    texturePreview.src = result.url;
                     texturePreview.style.display = 'block';
-                    texturePreview.dataset.url = textureUrl;
+                    texturePreview.dataset.url = result.url;
                     saveBtn.disabled = false;
                 } catch (error) {
                     console.error('Error generating texture:', error);
@@ -333,13 +322,8 @@ export class ColorManager {
         const vertex = new THREE.Vector3();
         let colorModified = false;
 
-        // Check if current color is a texture URL - with safe error handling
-        let isTextureUrl = false;
-        try {
-            isTextureUrl = this.textureHandler.isTextureUrl(this.currentColor);
-        } catch (err) {
-            console.warn("Error checking texture URL:", err);
-        }
+        // Check if current color is a texture URL
+        const isTextureUrl = this.textureHandler.isTextureUrl(this.currentColor);
         
         // Apply color to vertices within brush radius
         for (let i = 0; i < positions.count; i++) {
@@ -509,3 +493,47 @@ export class ColorManager {
         }
     }
 }
+
+document.addEventListener('colorChanged', (event) => {
+    const { color, name, isTexture } = event.detail;
+    // Switch to color tool automatically
+    currentTool = 'color';
+    updateActiveButton();
+    
+    // Update brush indicator color
+    if (brushIndicator && brushIndicator.material) {
+        if (isTexture) {
+            colorManager.textureHandler.loadTexture(color).then(texture => {
+                const mat = brushIndicator.material;
+                if (mat.map) mat.map.dispose();
+                mat.map = texture;
+                mat.color.set(0xFFFFFF); // Reset to white for texture
+                mat.needsUpdate = true;
+                mat.wireframe = false;
+                mat.opacity = 0.8;
+            }).catch(err => {
+                console.error('Failed to load texture for brush indicator:', err);
+                
+                // Fallback to a generic material
+                brushIndicator.material.color.set(0xCCCCCC);
+                brushIndicator.material.wireframe = true;
+                brushIndicator.material.opacity = 0.5;
+                if (brushIndicator.material.map) {
+                    brushIndicator.material.map.dispose();
+                    brushIndicator.material.map = null;
+                }
+                brushIndicator.material.needsUpdate = true;
+            });
+        } else {
+            // Reset to regular color
+            if (brushIndicator.material.map) {
+                brushIndicator.material.map.dispose();
+                brushIndicator.material.map = null;
+            }
+            brushIndicator.material.color.set(color);
+            brushIndicator.material.wireframe = false;
+            brushIndicator.material.opacity = 0.6;
+            brushIndicator.material.needsUpdate = true;
+        }
+    }
+});
