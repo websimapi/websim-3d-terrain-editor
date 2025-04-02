@@ -1,229 +1,208 @@
 import * as THREE from 'three';
 
-// Use a new collection name to avoid conflicts with the old schema
-const TERRAIN_HEIGHT_COLLECTION = 'terrainHeight_v2';
-
 export class TerrainDatabase {
     constructor(room, geometry, scene) {
         this.room = room;
         this.geometry = geometry;
         this.scene = scene;
-        this.myUsername = '';
-        this.myRecordId = null; // ID of the current user's terrain height record
-        // Stores the complete height data for the current user, loaded or initialized
-        this.currentUserHeightData = {};
-        // Stores the merged height data from all users
-        this.mergedTerrainHeightData = {};
+        // Represents the fully loaded/merged height state of the terrain
+        this.terrainHeightData = {}; // Stores { vertexIndex: height }
+        // Track the ID of the single canonical height state record
+        this.canonicalHeightRecordId = null;
+        // Track the timestamp of the currently applied height data to avoid loops
+        this.lastAppliedTimestamp = null;
+        this.myUsername = ''; // Set in initialize
         this.statusElement = document.getElementById('save-status');
-        this.isSaving = false;
-        this.saveQueued = false;
-        this.unsubscribe = null; // To store the unsubscribe function
+        // Stores changes during the current stroke before merging into terrainHeightData
+        this.currentStrokeHeightChanges = {};
+        // Flag to prevent saving while loading initial data
+        this.isLoading = true;
     }
 
-    async initialize() {
-        // Ensure we have the username before proceeding
-        while (!this.room.clientId || !this.room.peers[this.room.clientId]) {
-            console.log("Waiting for room client ID and peer info...");
-            await new Promise(resolve => setTimeout(resolve, 100));
-        }
-        this.myUsername = this.room.peers[this.room.clientId].username;
-        if (!this.myUsername) {
-             console.error("Failed to get username, cannot initialize TerrainDatabase correctly.");
-             return;
-        }
-        console.log(`TerrainDatabase initializing for user: ${this.myUsername}`);
-        await this.loadAndMergeAllTerrainData();
-    }
-
-    // Called during mouse drag by main.js to modify the user's local data
-    applyHeightChange(index, newHeight) {
-        // Directly modify the user's local data copy
-        this.currentUserHeightData[String(index)] = newHeight;
-        // Also update the merged data immediately for visual feedback
-        this.mergedTerrainHeightData[String(index)] = newHeight;
-        // Mark geometry for update locally
-        this.geometry.attributes.position.setY(index, newHeight);
-        this.geometry.attributes.position.needsUpdate = true; // Could optimize this
-        this.geometry.computeVertexNormals(); // Could optimize this
-    }
-
-    // Load all user records, merge them, apply to geometry, and subscribe
-    async loadAndMergeAllTerrainData() {
+    async loadTerrainData() {
+        this.isLoading = true;
         try {
-            console.log(`Loading all terrain data from ${TERRAIN_HEIGHT_COLLECTION}...`);
-            if (this.unsubscribe) {
-                this.unsubscribe(); // Unsubscribe from previous listener if exists
-                this.unsubscribe = null;
-                console.log("Unsubscribed from previous terrain height listener.");
-            }
+            console.log("Loading canonical terrain height state...");
+            const positions = this.geometry.attributes.position;
 
-            const allRecords = await this.room.collection(TERRAIN_HEIGHT_COLLECTION).getList();
-            console.log(`Found ${allRecords.length} height records.`);
+            // Fetch the list of state records (should ideally be just one)
+            const states = await this.room.collection('terrainHeightState').getList();
+            let latestState = null;
 
-            this.mergeRecords(allRecords);
-
-            // Find or initialize current user's record data
-            const myRecord = allRecords.find(r => r.username === this.myUsername);
-            if (myRecord) {
-                console.log("Found existing record for user:", this.myUsername);
-                this.myRecordId = myRecord.id;
-                // Ensure local data starts consistent with the record
-                this.currentUserHeightData = { ...(myRecord.heightData || {}) };
-                 // Make sure merged data also includes user's latest record data initially
-                this.mergeRecords(allRecords); // Re-merge AFTER finding user record
+            if (states.length > 0) {
+                // Sort by creation date just in case, take the newest
+                latestState = states.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+                this.canonicalHeightRecordId = latestState.id; // Store the ID
+                console.log('Applying initial terrain height state from record:', this.canonicalHeightRecordId, 'Timestamp:', latestState.timestamp);
+                this.applyHeightState(latestState);
             } else {
-                console.log("No existing record for user, will create on first save.");
-                this.myRecordId = null;
-                 // Initialize with current geometry state (should be flat or from initial load)
-                const positions = this.geometry.attributes.position;
-                 this.currentUserHeightData = {};
-                 for (let i = 0; i < positions.count; i++) {
-                     this.currentUserHeightData[String(i)] = positions.getY(i);
-                 }
+                console.log("No canonical terrain height state found. Creating initial flat terrain state.");
+                // If no state exists, initialize geometry to flat and create the first record
+                await this.createFlatTerrainStateRecord(); // This sets geometry and saves the first state
             }
 
-            this.applyMergedDataToGeometry();
-
-            // Subscribe to future changes in ANY record in the collection
-            this.unsubscribe = this.room.collection(TERRAIN_HEIGHT_COLLECTION).subscribe((updatedRecords) => {
-                console.log(`Subscription update: Received ${updatedRecords.length} height records.`);
-                 // Check if our record ID changed (e.g., deleted and recreated)
-                 const myNewRecord = updatedRecords.find(r => r.username === this.myUsername);
-                 this.myRecordId = myNewRecord ? myNewRecord.id : null;
-                 if (myNewRecord && !this.isSaving) { // Avoid overwriting local changes while saving
-                     // Update local copy only if not currently saving to avoid conflicts
-                     this.currentUserHeightData = { ...(myNewRecord.heightData || {}) };
-                 }
-
-                this.mergeRecords(updatedRecords);
-                this.applyMergedDataToGeometry();
+            // Subscribe to future updates of the canonical state record
+            this.room.collection('terrainHeightState').subscribe((incomingStates) => {
+                if (incomingStates.length > 0) {
+                    const updatedState = incomingStates.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+                    // Check if the incoming state is different from what we have applied
+                    if (updatedState.id !== this.canonicalHeightRecordId || updatedState.timestamp !== this.lastAppliedTimestamp) {
+                        console.log(`Received updated height state via subscription (ID: ${updatedState.id}, TS: ${updatedState.timestamp}). Applying...`);
+                        this.canonicalHeightRecordId = updatedState.id; // Update ID just in case
+                        this.applyHeightState(updatedState); // Apply the full state
+                        // Ensure geometry reflects the update
+                        this.geometry.attributes.position.needsUpdate = true;
+                        this.geometry.computeVertexNormals();
+                    }
+                } else {
+                    // Handle case where the state might have been deleted?
+                    console.warn("Canonical height state subscription returned empty list.");
+                    // Perhaps reset to flat or handle as appropriate
+                    // await this.createFlatTerrainStateRecord();
+                }
             });
-            console.log(`Subscribed to ${TERRAIN_HEIGHT_COLLECTION} updates.`);
+
+            console.log("Terrain height state loading process complete.");
 
         } catch (error) {
-            console.error('Error loading and merging terrain height data:', error);
-        }
-    }
-
-    // Merge data from multiple records (last update wins per vertex)
-    mergeRecords(records) {
-        console.log(`Merging ${records.length} height records...`);
-        const newMergedData = {};
-        const lastUpdatePerVertex = {}; // { vertexIndex: timestamp_ms }
-
-        // Sort records by update time (oldest first)
-        const sortedRecords = records.sort((a, b) => {
-             // Use created_at as records are updated in place now
-            const timeA = new Date(a.created_at).getTime();
-            const timeB = new Date(b.created_at).getTime();
-            return timeA - timeB;
-        });
-
-
-        for (const record of sortedRecords) {
-            if (!record.heightData || typeof record.heightData !== 'object') continue;
-            const recordTimestamp = new Date(record.created_at).getTime(); // Use created_at
-
-            for (const [indexStr, height] of Object.entries(record.heightData)) {
-                 // No need to check timestamp here, simple overwrite works due to sorting
-                 newMergedData[indexStr] = height;
-            }
-        }
-         this.mergedTerrainHeightData = newMergedData;
-         console.log(`Merging complete. Merged vertices: ${Object.keys(this.mergedTerrainHeightData).length}`);
-    }
-
-    // Apply the merged data to the Three.js geometry
-    applyMergedDataToGeometry() {
-        console.log("Applying merged height data to geometry...");
-        const positions = this.geometry.attributes.position;
-        let vertexModified = false;
-        const defaultHeight = 0; // Fallback height if not in merged data
-
-        for (let i = 0; i < positions.count; i++) {
-            const indexStr = String(i);
-            const targetHeight = this.mergedTerrainHeightData[indexStr] !== undefined
-                ? this.mergedTerrainHeightData[indexStr]
-                : defaultHeight; // Use default if vertex not in any record
-
-            if (Math.abs(positions.getY(i) - targetHeight) > 0.001) {
-                 positions.setY(i, targetHeight);
-                 vertexModified = true;
-            }
-            // Ensure currentUserHeightData also reflects the initial merged state for vertices
-            // they haven't modified yet in this session.
-             if (this.currentUserHeightData[indexStr] === undefined) {
-                 this.currentUserHeightData[indexStr] = targetHeight;
-             }
-        }
-
-        if (vertexModified) {
-            positions.needsUpdate = true;
+            console.error('Error loading terrain height state:', error);
+            // Fallback: ensure terrain is at least flat locally
+            this.applyHeightState({ heightData: {} }); // Apply empty data to ensure reset potentially
+        } finally {
+            this.isLoading = false; // Mark loading as complete
+            // Ensure geometry is updated visually after loading attempt
+            this.geometry.attributes.position.needsUpdate = true;
             this.geometry.computeVertexNormals();
-            console.log('Geometry updated with merged height data.');
-        } else {
-            console.log('Geometry already up-to-date with merged height data.');
         }
     }
 
-    // Save the user's complete terrain data (updates existing or creates new)
+    // Apply a full height data map (from the canonical state record)
+    applyHeightState(stateData) {
+        if (!stateData || typeof stateData.heightData !== 'object') {
+            console.warn('Invalid height state data:', stateData);
+            // Ensure terrain is reset to flat if data is bad
+            stateData = { heightData: {} }; // Use default empty data
+        }
+        // Avoid re-applying the same state received via subscription
+        if (stateData.timestamp && stateData.timestamp === this.lastAppliedTimestamp) {
+            // console.log("Skipping application of already current height state.");
+            return false;
+        }
+
+        console.log("Applying canonical height state...");
+        const positions = this.geometry.attributes.position;
+        let applied = false;
+        // Directly replace local state with the loaded state data
+        this.terrainHeightData = { ...stateData.heightData };
+
+        // Apply heights from state, default to 0 if index missing
+        for (let i = 0; i < positions.count; i++) {
+            const height = this.terrainHeightData[i] !== undefined ? Number(this.terrainHeightData[i]) : 0; // Default to 0 height
+            positions.setY(i, height);
+            // Ensure local cache reflects the applied state (including defaults)
+            this.terrainHeightData[i] = height;
+            applied = true; // Mark if any vertex was processed
+        }
+
+        if (applied) {
+            console.log('Applied canonical height state data to terrain geometry.');
+            this.lastAppliedTimestamp = stateData.timestamp; // Track the timestamp of applied data
+        } else {
+            console.warn('No valid height data found in state record, terrain may be flat.');
+        }
+        // Caller should handle needsUpdate and computeVertexNormals typically
+        return applied;
+    }
+
+    // Called during mouse drag to stage changes for the current stroke
+    accumulateHeightChange(index, newHeight) {
+        // Store the latest height for this vertex within the current stroke
+        this.currentStrokeHeightChanges[index] = newHeight;
+    }
+
+    // Save the *entire current* height state by updating the canonical record
     async saveTerrainChanges() {
-        if (this.isSaving) {
-             console.log("Save already in progress, queueing next save.");
-             this.saveQueued = true;
+        // Merge changes from the current stroke into the main state
+        if (Object.keys(this.currentStrokeHeightChanges).length > 0) {
+            this.terrainHeightData = { ...this.terrainHeightData, ...this.currentStrokeHeightChanges };
+            this.currentStrokeHeightChanges = {}; // Reset stroke changes
+        } else {
+            console.log("No height changes in current stroke to save.");
+            return; // No need to save if nothing changed in the stroke
+        }
+
+        // Prevent saving during initial load or if no data exists
+        if (this.isLoading || Object.keys(this.terrainHeightData).length === 0) {
+            console.log("Skipping save: Still loading or no height data.");
             return;
         }
-        if (!this.myUsername) {
-            console.error("Cannot save terrain changes, username is not set.");
-            return;
-        }
-
-        this.isSaving = true;
-        this.showSaveStatus(true, 'Saving height...');
-        console.log("Attempting to save terrain height changes for user:", this.myUsername);
-
-        const dataToSave = { ...this.currentUserHeightData };
-        const vertexCount = Object.keys(dataToSave).length;
-        // Use current timestamp for updated_at (Websim handles created_at)
-        const updateTimestamp = new Date().toISOString();
-
 
         try {
-            if (this.myRecordId) {
-                // Update existing record
-                console.log(`Updating record ${this.myRecordId} for ${this.myUsername}`);
-                await this.room.collection(TERRAIN_HEIGHT_COLLECTION).update(this.myRecordId, {
-                    heightData: dataToSave,
-                    vertexCount: vertexCount,
-                    updated_at: updateTimestamp // Explicitly track update time
-                });
-                console.log(`Successfully updated record ${this.myRecordId}`);
+            this.showSaveStatus(true, 'Saving height...');
+
+            const saveData = {
+                heightData: this.terrainHeightData,
+                vertexCount: this.geometry.attributes.position.count,
+                timestamp: new Date().toISOString() // Use timestamp to track updates
+            };
+
+            if (this.canonicalHeightRecordId) {
+                // Update the existing canonical record
+                await this.room.collection('terrainHeightState').update(this.canonicalHeightRecordId, saveData);
+                console.log(`Updated canonical height state record: ${this.canonicalHeightRecordId}`);
             } else {
-                // Create new record
-                 console.log(`Creating new record for ${this.myUsername}`);
-                const newRecord = await this.room.collection(TERRAIN_HEIGHT_COLLECTION).create({
-                    heightData: dataToSave,
-                    vertexCount: vertexCount,
-                    // username is handled automatically
-                    updated_at: updateTimestamp // Explicitly track update time
-                 });
-                 this.myRecordId = newRecord.id; // Store the new record ID
-                 console.log(`Successfully created new record ${this.myRecordId}`);
+                // Create the first canonical record if it doesn't exist yet
+                console.log("Canonical height record ID not found, creating new one...");
+                const newRecord = await this.room.collection('terrainHeightState').create(saveData);
+                this.canonicalHeightRecordId = newRecord.id; // Store the new ID
+                this.lastAppliedTimestamp = saveData.timestamp; // Set timestamp for the newly created record
+                console.log(`Created canonical height state record: ${this.canonicalHeightRecordId}`);
             }
-            this.showSaveStatus(false); // Hide status indicator
+
+            this.showSaveStatus(false);
+
         } catch (error) {
-            console.error(`Error saving terrain height data for ${this.myUsername}:`, error);
-            this.showSaveStatus(true, 'Error saving height!', true); // Show error
-             // Keep showing error for a bit
-             setTimeout(() => this.showSaveStatus(false), 3000);
+            console.error('Error saving terrain height state:', error);
+            this.showSaveStatus(false, 'Error saving height!', true);
+            // Consider how to handle errors
         } finally {
-            this.isSaving = false;
-             if (this.saveQueued) {
-                 this.saveQueued = false;
-                 console.log("Processing queued save request.");
-                 // Use setTimeout to avoid potential infinite loops on rapid errors
-                 setTimeout(() => this.saveTerrainChanges(), 100);
-             }
+            this.currentStrokeHeightChanges = {}; // Always clear stroke changes after attempt
+        }
+    }
+
+    // Create the initial flat terrain state record if none exists
+    async createFlatTerrainStateRecord() {
+        try {
+            console.log("Creating initial flat terrain state record...");
+            const positions = this.geometry.attributes.position;
+            const heightData = {};
+            this.terrainHeightData = {}; // Reset local cache
+
+            for (let i = 0; i < positions.count; i++) {
+                heightData[i] = 0;
+                positions.setY(i, 0); // Set geometry flat
+                this.terrainHeightData[i] = 0; // Update local cache
+            }
+
+            // Geometry update (needsUpdate, normals) handled by caller (loadTerrainData)
+
+            const saveData = {
+                heightData: heightData,
+                vertexCount: positions.count,
+                isInitial: true,
+                timestamp: new Date().toISOString()
+            };
+
+            // Save the initial state record
+            const stateRecord = await this.room.collection('terrainHeightState').create(saveData);
+            this.canonicalHeightRecordId = stateRecord.id; // Store the ID of the created record
+            this.lastAppliedTimestamp = saveData.timestamp; // Track its timestamp
+            console.log('Created and saved initial flat terrain state record:', this.canonicalHeightRecordId);
+            return heightData; // Return the data for immediate application if needed
+
+        } catch (error) {
+            console.error('Error creating flat terrain state record:', error);
+            throw error; // Re-throw to indicate initialization failure potential
         }
     }
 
@@ -235,24 +214,14 @@ export class TerrainDatabase {
         this.statusElement.style.opacity = isVisible ? '1' : '0';
         this.statusElement.style.backgroundColor = isError ? 'rgba(220,53,69,0.7)' : 'rgba(0,0,0,0.7)';
 
-        // Auto-hide for non-error messages after a delay
         if (isVisible && !isError) {
+            // Auto-hide for non-error messages
             setTimeout(() => {
-                // Only hide if the status hasn't changed (e.g., to an error)
-                if (this.statusElement.textContent === message && !this.isSaving && !isError) {
-                   this.statusElement.style.opacity = '0';
+                // Check if the message is still the same saving message before hiding
+                if (this.statusElement.textContent === message && !isError) {
+                    this.statusElement.style.opacity = '0';
                 }
             }, 1500);
-        }
-         // Don't auto-hide error messages, they require user attention or success
-    }
-
-    // Clean up subscription on disconnect/unload
-    dispose() {
-        if (this.unsubscribe) {
-            this.unsubscribe();
-            this.unsubscribe = null;
-            console.log("Unsubscribed from terrain height updates on dispose.");
         }
     }
 }

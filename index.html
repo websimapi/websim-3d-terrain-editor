@@ -7,27 +7,28 @@
     <style>
         body { margin: 0; overflow: hidden; background-color: #222; color: white; font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; }
         canvas { display: block; }
-        #controls { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.7); padding: 15px; border-radius: 8px; z-index: 10; display: flex; flex-direction: column; gap: 10px; }
+        #controls { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.7); padding: 15px; border-radius: 8px; z-index: 10; display: flex; flex-direction: column; gap: 10px; max-height: calc(100vh - 40px); overflow-y: auto; }
         .control-group { display: flex; flex-direction: column; gap: 5px; }
         .control-group label { font-weight: bold; font-size: 0.9em; }
         .control-group input[type="range"] { width: 150px; cursor: pointer; }
-        .button-group { display: flex; gap: 5px; margin-top: 5px;}
-        .button-group button { padding: 8px 12px; cursor: pointer; border: none; border-radius: 4px; background-color: #555; color: white; transition: background-color 0.2s ease; display: flex; align-items: center; gap: 5px; }
-        .button-group button.active { background-color: #4682B4; /* Steel Blue */ box-shadow: 0 0 5px #4682B4; }
+        .button-group { display: flex; gap: 5px; margin-top: 5px; flex-wrap: wrap;} 
+        .button-group button { padding: 8px 12px; cursor: pointer; border: none; border-radius: 4px; background-color: #555; color: white; transition: background-color 0.2s ease; display: flex; align-items: center; gap: 5px; margin-bottom: 5px; } 
+        .button-group button.active { background-color: #4682B4; box-shadow: 0 0 5px #4682B4; }
         .button-group button:hover:not(.active) { background-color: #777; }
         .tool-icon { width: 16px; height: 16px; fill: white; }
         .slider-value { font-size: 0.8em; color: #ccc; margin-left: 5px; }
-        #flattenHeightControl { display: none; /* Initially hidden */ }
+        #flattenHeightControl { display: none; } 
         #colorPickerControl { margin-top: 10px; display: flex; flex-direction: column; gap: 5px; }
-        .color-swatch { width: 25px; height: 25px; border-radius: 4px; cursor: pointer; transition: transform 0.1s ease; }
+        .color-swatch { width: 25px; height: 25px; border-radius: 4px; cursor: pointer; transition: transform 0.1s ease; border: 1px solid rgba(255, 255, 255, 0.2); } 
         .color-swatch:hover { transform: scale(1.1); }
         .color-swatch.active { box-shadow: 0 0 0 2px white; transform: scale(1.1); }
-        .color-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; }
-        #players-list { position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,0.7); padding: 15px; border-radius: 8px; z-index: 10; max-height: 300px; overflow-y: auto; }
+        .color-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(25px, 1fr)); gap: 5px; max-width: 160px; } 
+        #players-list { position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,0.7); padding: 15px; border-radius: 8px; z-index: 10; max-height: 300px; overflow-y: auto; width: 200px; } 
+        #players-list h3 { margin-top: 0; margin-bottom: 10px; font-size: 1em; }
         .player-item { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
         .player-avatar { width: 24px; height: 24px; border-radius: 50%; }
-        .player-name { font-size: 0.9em; }
-        #save-status { position: absolute; bottom: 10px; left: 10px; background: rgba(0,0,0,0.7); padding: 8px 15px; border-radius: 8px; font-size: 0.9em; opacity: 0; transition: opacity 0.3s ease; }
+        .player-name { font-size: 0.9em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-grow: 1; } 
+        #save-status { position: absolute; bottom: 10px; left: 10px; background: rgba(0,0,0,0.7); padding: 8px 15px; border-radius: 8px; font-size: 0.9em; opacity: 0; transition: opacity 0.3s ease; z-index: 11; } 
     </style>
 </head>
 <body>
@@ -43,29 +44,35 @@
         <div class="control-group">
             <label>Tool:</label>
             <div class="button-group">
-                <button id="selectionBtn" data-tool="select">
+                <button id="selectionBtn" data-tool="select" title="Select & Navigate">
                     <svg class="tool-icon" viewBox="0 0 24 24">
                         <path d="M7,2l12,11.2l-5.8,0.5l3.3,7.3l-2.2,1l-3.2-7.4L7,18.5V2"/>
                     </svg>
                     Select
                 </button>
-                <button id="raiseBtn" class="active" data-tool="raise">
+                <button id="raiseBtn" class="active" data-tool="raise" title="Raise Terrain">
                     <svg class="tool-icon" viewBox="0 0 24 24">
                         <path d="M12,20V10.8l5.5,5.5l1.42-1.42L12,8L5.08,14.92l1.42,1.42L12,10.8V20z"/>
                     </svg>
                     Raise
                 </button>
-                <button id="lowerBtn" data-tool="lower">
+                <button id="lowerBtn" data-tool="lower" title="Lower Terrain">
                     <svg class="tool-icon" viewBox="0 0 24 24">
                         <path d="M12,4v9.2l-5.5-5.5L5.08,9.12L12,16l6.92-6.92l-1.42-1.42L12,13.2V4z"/>
                     </svg>
                     Lower
                 </button>
-                <button id="flattenBtn" data-tool="flatten">
+                <button id="flattenBtn" data-tool="flatten" title="Flatten Terrain">
                     <svg class="tool-icon" viewBox="0 0 24 24">
                         <path d="M5,11h14v2H5z"/>
                     </svg>
                     Flatten
+                </button>
+                 <button id="colorBtn" data-tool="color" title="Paint Terrain">
+                    <svg class="tool-icon" viewBox="0 0 24 24" fill="currentColor">
+                         <path d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9c.83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.01-.23-.26-.38-.61-.38-.99 0-.83.67-1.5 1.5-1.5H16c2.76 0 5-2.24 5-5 0-4.42-4.03-8-9-8zm-5.5 9c-.83 0-1.5.67-1.5 1.5S5.67 15 6.5 15 8 14.33 8 13.5 7.33 12 6.5 12zm3-4c-.83 0-1.5.67-1.5 1.5S8.67 11 9.5 11s1.5-.67 1.5-1.5S10.33 8 9.5 8zm5 0c-.83 0-1.5.67-1.5 1.5S13.67 11 14.5 11s1.5-.67 1.5-1.5S15.33 8 14.5 8zm3 4c-.83 0-1.5.67-1.5 1.5S16.67 15 17.5 15s1.5-.67 1.5-1.5S18.33 12 17.5 12z"/>
+                    </svg>
+                    Paint
                 </button>
             </div>
         </div>
@@ -75,12 +82,16 @@
         </div>
         <div class="control-group" id="colorPickerControl">
             <label>Terrain Color:</label>
-            <div class="color-grid" id="colorSwatches"></div>
+            <div class="color-grid" id="colorSwatches">
+                <!-- Swatches added by JS -->
+            </div>
         </div>
     </div>
     <div id="players-list">
         <h3>Active Players</h3>
-        <div id="players-container"></div>
+        <div id="players-container">
+             <!-- Player list added by JS -->
+        </div>
     </div>
     <div id="save-status">Saving changes...</div>
     <script type="importmap">
@@ -92,8 +103,7 @@
     }
     </script>
     <script type="module" src="main.js"></script>
-    <script type="module" src="uiControls.js"></script>
-    <script type="module" src="terraindb.js"></script>
+    <!-- Removed terraindb.js script tag - it's imported by main.js -->
 <script defer src="https://static.cloudflareinsights.com/beacon.min.js/v8c78df7c7c0f484497ecbca7046644da1771523124516" integrity="sha512-8DS7rgIrAmghBFwoOTujcf6D9rXvH8xm8JQ1Ja01h9QX8EzXldiszufYa4IFfKdLUKTTrnSFXLDkUEOTrZQ8Qg==" data-cf-beacon='{"version":"2024.11.0","token":"4c6229722a6346bc8eb5cb0e5eae5d41","server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
 </body>
 </html>
