@@ -58,15 +58,43 @@ scene.add(terrain);
 // --- Controls ---
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true; // Smooth camera movement
-controls.dampingFactor = 0.05; // Keep damping factor
-controls.screenSpacePanning = true; // Better panning behavior
-controls.minDistance = 5; // Lower min distance
-controls.maxDistance = 150; // Reduced max distance for better control
-controls.maxPolarAngle = Math.PI / 2.1; // Prevent camera going below horizon
+controls.dampingFactor = 0.05;
+controls.screenSpacePanning = true;
+controls.minDistance = 5;
+controls.maxDistance = 150;
+controls.maxPolarAngle = Math.PI / 2.1;
 controls.target.set(0, 0, 0);
-controls.zoomSpeed = 0.3; // *** DECREASED zoom speed further ***
-controls.rotateSpeed = 0.5; // Adjusted rotation speed
-controls.panSpeed = 0.5; // Adjusted pan speed
+// Replace the previous zoom configuration with these settings
+controls.zoomSpeed = 0.15; // Much lower zoom speed
+// Add custom zoom handling
+controls.mouseButtons = {
+    LEFT: THREE.MOUSE.ROTATE,
+    MIDDLE: THREE.MOUSE.DOLLY,
+    RIGHT: THREE.MOUSE.PAN
+};
+// Disable default mouse wheel zooming
+controls.enableZoom = true;
+renderer.domElement.addEventListener('wheel', onMouseWheel, { passive: false });
+
+function onMouseWheel(event) {
+    event.preventDefault();
+    // Custom zoom factor calculation with exponential scaling for smoother zoom
+    const zoomFactor = 0.05;
+    // Use deltaY with a small factor and sign-based zoom direction
+    const delta = -Math.sign(event.deltaY) * Math.min(Math.abs(event.deltaY * 0.01), 0.25);
+    // Calculate new distance maintaining constraints
+    const currentDistance = camera.position.distanceTo(controls.target);
+    const newDistance = THREE.MathUtils.clamp(
+        currentDistance * (1 - delta * zoomFactor),
+        controls.minDistance,
+        controls.maxDistance
+    );
+    // Apply the zoom directly to the camera
+    if (newDistance !== currentDistance) {
+        const direction = camera.position.clone().sub(controls.target).normalize();
+        camera.position.copy(controls.target).add(direction.multiplyScalar(newDistance));
+    }
+}
 
 // --- Terrain Editing ---
 const raycaster = new THREE.Raycaster();
