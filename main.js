@@ -2,7 +2,6 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TerrainDatabase } from './terraindb.js';
 import { PlayerManager } from './players.js';
-import { TerrainColorManager } from './terrainColors.js';
 
 // Room setup for multiplayer
 const room = new WebsimSocket();
@@ -12,7 +11,6 @@ let myUsername = '';
 // Will be initialized later
 let terrainDB;
 let playerManager;
-let colorManager;
 
 // --- Scene Setup ---
 const scene = new THREE.Scene();
@@ -77,9 +75,6 @@ terrain.receiveShadow = true;
 terrain.castShadow = true;
 terrain.name = 'terrain'; // Name for easy reference
 scene.add(terrain);
-
-// Initialize color manager with the geometry
-colorManager = new TerrainColorManager(room, geometry, scene);
 
 // --- Controls ---
 const controls = new OrbitControls(camera, renderer.domElement);
@@ -240,41 +235,73 @@ function onPointerUpTerrain(event) {
         }
         
         // Save color changes if any
-        if (currentTool === 'color' && terrainDB) {
-            const colorChanges = colorManager.getColorChanges();
-            if (Object.keys(colorChanges).length > 0) {
-                terrainDB.saveColorChanges(colorChanges);
-            }
+        if (Object.keys(colorChanges).length > 0 && terrainDB) {
+            terrainDB.saveColorChanges(colorChanges);
+            colorChanges = {}; // Reset changes after saving
         }
     }
 }
 
-function updateBrushIndicator() {
-    raycaster.setFromCamera(mouse, camera);
-    const intersects = raycaster.intersectObject(terrain);
+// Color palette
+const colorPalette = [
+    { hex: '#66aa66', name: 'Grass Green' },
+    { hex: '#228B22', name: 'Forest Green' },
+    { hex: '#8B4513', name: 'Brown' },
+    { hex: '#A0522D', name: 'Sienna' },
+    { hex: '#C2B280', name: 'Sand' },
+    { hex: '#F5DEB3', name: 'Wheat' },
+    { hex: '#7393B3', name: 'Blue Gray' },
+    { hex: '#FFFFFF', name: 'Snow' },
+    { hex: '#808080', name: 'Gray' },
+    { hex: '#2F4F4F', name: 'Dark Slate' },
+    { hex: '#000000', name: 'Black' },
+    { hex: '#8A9A5B', name: 'Moss Green' }
+];
 
-    if (intersects.length > 0) {
-        const intersection = intersects[0];
-        brushIndicator.position.copy(intersection.point);
-        const scale = parseFloat(brushSizeSlider.value) * 0.2;
-        brushIndicator.scale.set(scale, scale, scale);
+let currentColor = colorPalette[0].hex;
+let colorChanges = {};
+
+function initializeColorPalette() {
+    const swatchesContainer = document.getElementById('colorSwatches');
+    swatchesContainer.innerHTML = ''; // Clear any existing swatches
+    
+    colorPalette.forEach(color => {
+        const swatch = document.createElement('div');
+        swatch.className = 'color-swatch';
+        swatch.style.backgroundColor = color.hex;
+        swatch.title = color.name;
+        swatch.dataset.color = color.hex;
         
-        // Only show brush indicator for brush tools
-        brushIndicator.visible = (currentTool !== 'select');
+        // Mark the first color as active by default
+        if (color.hex === currentColor) {
+            swatch.classList.add('active');
+        }
         
-        // Update color for paint brush
-        if (currentTool === 'color') {
-            brushIndicator.material.color.set(colorManager.getCurrentColor());
+        swatch.addEventListener('click', (e) => {
+            // Prevent brush application when clicking color
+            e.stopPropagation();
+            
+            // Update active swatch
+            document.querySelectorAll('.color-swatch').forEach(s => {
+                s.classList.remove('active');
+            });
+            swatch.classList.add('active');
+            
+            // Update current color
+            currentColor = color.hex;
+            
+            // Switch to color tool automatically
+            currentTool = 'color';
+            updateActiveButton();
+            
+            // Update brush indicator color
+            brushIndicator.material.color.set(currentColor);
             brushIndicator.material.wireframe = false;
             brushIndicator.material.opacity = 0.6;
-        } else {
-            brushIndicator.material.color.set(0xffffff);
-            brushIndicator.material.wireframe = true;
-            brushIndicator.material.opacity = 0.5;
-        }
-    } else {
-        brushIndicator.visible = false;
-    }
+        });
+        
+        swatchesContainer.appendChild(swatch);
+    });
 }
 
 function applyBrush() {
@@ -294,6 +321,27 @@ function applyBrush() {
         let vertexModified = false;
         let colorModified = false;
 
+        // Initialize color attribute if using color tool for the first time
+        if (currentTool === 'color' && (!geometry.attributes.color || !material.vertexColors)) {
+            if (!geometry.attributes.color) {
+                const colors = new Float32Array(positions.count * 3);
+                // Initialize with default terrain color (light green)
+                for (let i = 0; i < colors.length; i += 3) {
+                    colors[i] = 0.4;     // R
+                    colors[i + 1] = 0.6;  // G
+                    colors[i + 2] = 0.4;  // B
+                }
+                geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+            }
+            
+            // Enable vertex colors on the material
+            material.vertexColors = true;
+            material.needsUpdate = true;
+        }
+
+        // Get the color attribute if it exists
+        const colorAttribute = geometry.attributes.color;
+
         // Iterate through all vertices
         for (let i = 0; i < positions.count; i++) {
             vertex.fromBufferAttribute(positions, i);
@@ -308,26 +356,39 @@ function applyBrush() {
                 const strengthFactor = brushStrength * falloff * 0.15;
 
                 if (currentTool === 'raise') {
-                    // ... existing raise code ...
                     const currentHeight = positions.getY(i);
                     const newHeight = currentHeight + strengthFactor;
                     positions.setY(i, newHeight);
                     vertexModified = true;
                 } else if (currentTool === 'lower') {
-                    // ... existing lower code ...
                     const currentHeight = positions.getY(i);
                     const newHeight = currentHeight - strengthFactor;
                     positions.setY(i, newHeight);
                     vertexModified = true;
                 } else if (currentTool === 'flatten') {
-                    // ... existing flatten code ...
                     const currentHeight = positions.getY(i);
                     const newHeight = THREE.MathUtils.lerp(currentHeight, targetFlattenHeight, strengthFactor * 0.5);
                     positions.setY(i, newHeight);
                     vertexModified = true;
-                } else if (currentTool === 'color') {
-                    // Delegate color application to the color manager
-                    colorModified = colorManager.applyColorToBrush(hitPoint, brushRadius, brushStrength);
+                } else if (currentTool === 'color' && colorAttribute) {
+                    // Apply color with falloff for blending
+                    const color = new THREE.Color(currentColor);
+                    
+                    // If we already have a color, blend with existing
+                    const existingColor = new THREE.Color();
+                    existingColor.fromBufferAttribute(colorAttribute, i);
+                    
+                    // Lerp between existing and new color based on falloff and strength
+                    const blendFactor = falloff * (brushStrength / 5);
+                    existingColor.lerp(color, blendFactor);
+                    
+                    // Apply the color
+                    colorAttribute.setXYZ(i, existingColor.r, existingColor.g, existingColor.b);
+                    
+                    // Store the color change for database
+                    colorChanges[i] = '#' + existingColor.getHexString();
+                    
+                    colorModified = true;
                 }
             }
         }
@@ -341,8 +402,36 @@ function applyBrush() {
         
         // If colors were modified, update the color attribute
         if (colorModified) {
-            // Color attribute updates are handled by color manager
+            colorAttribute.needsUpdate = true;
         }
+    }
+}
+
+function updateBrushIndicator() {
+    raycaster.setFromCamera(mouse, camera);
+    const intersects = raycaster.intersectObject(terrain);
+
+    if (intersects.length > 0) {
+        const intersection = intersects[0];
+        brushIndicator.position.copy(intersection.point);
+        const scale = parseFloat(brushSizeSlider.value) * 0.2;
+        brushIndicator.scale.set(scale, scale, scale);
+        
+        // Only show brush indicator for brush tools
+        brushIndicator.visible = (currentTool !== 'select');
+        
+        // Update color for paint brush
+        if (currentTool === 'color') {
+            brushIndicator.material.color.set(currentColor);
+            brushIndicator.material.wireframe = false;
+            brushIndicator.material.opacity = 0.6;
+        } else {
+            brushIndicator.material.color.set(0xffffff);
+            brushIndicator.material.wireframe = true;
+            brushIndicator.material.opacity = 0.5;
+        }
+    } else {
+        brushIndicator.visible = false;
     }
 }
 
@@ -362,11 +451,6 @@ async function initializeMultiplayer() {
         // Initialize the terrain database module
         terrainDB = new TerrainDatabase(room, geometry, scene);
         await terrainDB.initialize();
-        
-        // Set up the connection between color manager and terrain database
-        terrainDB.onColorDataLoaded = (colorData) => {
-            colorManager.applyColorDataToTerrain(colorData);
-        };
         
         // Initialize player manager
         playerManager = new PlayerManager(room, scene);
@@ -418,23 +502,27 @@ updateSliderValue(flattenHeightSlider, flattenHeightValueSpan);
 updateActiveButton(); // Set initial active button state and flatten slider visibility
 
 const buttonGroup = document.querySelector('.button-group');
-const colorButton = document.createElement('button');
-colorButton.id = 'colorBtn';
-colorButton.dataset.tool = 'color';
-colorButton.innerHTML = `
-    <svg class="tool-icon" viewBox="0 0 24 24">
-        <path d="M7,14c-1.66,0-3,1.34-3,3c0,1.31-1.16,2-2,2c0.92,1.22,2.49,2,4,2c2.21,0,4-1.79,4-4
-    C10,15.34,8.66,14,7,14z M20.71,4.63l-1.34-1.34c-0.39-0.39-1.02-0.39-1.41,0L9,12.25L11.75,15l8.96-8.96
-    C21.1,5.65,21.1,5.02,20.71,4.63z"/>
-    </svg>
-    Paint
-`;
-buttonGroup.appendChild(colorButton);
+// Check if button already exists to avoid duplicates
+if (!document.getElementById('colorBtn')) {
+    const colorButton = document.createElement('button');
+    colorButton.id = 'colorBtn';
+    colorButton.dataset.tool = 'color';
+    colorButton.innerHTML = `
+        <svg class="tool-icon" viewBox="0 0 24 24">
+            <path d="M7,14c-1.66,0-3,1.34-3,3c0,1.31-1.16,2-2,2c0.92,1.22,2.49,2,4,2c2.21,0,4-1.79,4-4
+        C10,15.34,8.66,14,7,14z M20.71,4.63l-1.34-1.34c-0.39-0.39-1.02-0.39-1.41,0L9,12.25L11.75,15l8.96-8.96
+        C21.1,5.65,21.1,5.02,20.71,4.63z"/>
+        </svg>
+        Paint
+    `;
+    buttonGroup.appendChild(colorButton);
+    colorButton.addEventListener('click', (e) => {
+        e.stopPropagation();
+        currentTool = 'color';
+        updateActiveButton();
+    });
+}
 
-colorManager.initialize(); // Initialize color palette
-colorManager.onColorChange = (color) => {
-    brushIndicator.material.color.set(color);
-};
-
+initializeColorPalette();
 initializeMultiplayer(); // Initialize multiplayer before starting animation
 animate();

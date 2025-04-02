@@ -15,7 +15,6 @@ export class TerrainDatabase {
         this.myUsername = '';
         this.statusElement = document.getElementById('save-status');
         this.strokeStartTime = null;
-        this.onColorDataLoaded = null; // Add callback for color data loading
     }
 
     async initialize() {
@@ -211,12 +210,6 @@ export class TerrainDatabase {
         
         // Store colors locally
         this.terrainColors = {...this.terrainColors, ...colorData};
-        
-        // Use the callback if available
-        if (this.onColorDataLoaded) {
-            this.onColorDataLoaded(colorData);
-            return;
-        }
         
         // Get the mesh material if it's a mesh
         const terrainMaterial = this.scene.getObjectByName('terrain').material;
