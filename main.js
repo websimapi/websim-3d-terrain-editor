@@ -337,6 +337,8 @@ function updateBrushIndicator() {
                     brushIndicator.material.map = null;
                 }
                 brushIndicator.material.color.set(colorManager.currentColor);
+                brushIndicator.material.wireframe = false;
+                brushIndicator.material.opacity = 0.6;
             }
             brushIndicator.material.wireframe = false;
             brushIndicator.material.opacity = 0.6;
@@ -364,25 +366,43 @@ document.addEventListener('colorChanged', (event) => {
     
     // Update brush indicator color
     if (isTexture) {
-        // Create a canvas texture for the brush indicator
-        const loader = new THREE.TextureLoader();
-        loader.load(color, (texture) => {
-            const mat = brushIndicator.material;
-            if (mat.map) mat.map.dispose();
-            mat.map = texture;
-            mat.needsUpdate = true;
-            mat.wireframe = false;
-            mat.opacity = 0.8;
-        });
+        try {
+            // Create a texture for the brush indicator using the TextureHandler
+            colorManager.textureHandler.loadTexture(color).then(texture => {
+                const mat = brushIndicator.material;
+                if (mat.map) mat.map.dispose();
+                mat.map = texture;
+                mat.needsUpdate = true;
+                mat.wireframe = false;
+                mat.opacity = 0.8;
+            }).catch(err => {
+                console.warn("Failed to load texture for brush indicator:", err);
+                // Reset to default on error
+                brushIndicator.material.color.set(0x888888);
+                brushIndicator.material.wireframe = false;
+                brushIndicator.material.opacity = 0.6;
+            });
+        } catch (err) {
+            console.warn("Error setting up brush texture:", err);
+            // Use default fallback
+            brushIndicator.material.color.set(0x888888);
+            brushIndicator.material.wireframe = false;
+            brushIndicator.material.opacity = 0.6;
+        }
     } else {
         // Reset to regular color
-        if (brushIndicator.material.map) {
-            brushIndicator.material.map.dispose();
-            brushIndicator.material.map = null;
+        try {
+            if (brushIndicator.material.map) {
+                brushIndicator.material.map.dispose();
+                brushIndicator.material.map = null;
+            }
+            brushIndicator.material.color.set(color);
+            brushIndicator.material.wireframe = false;
+            brushIndicator.material.opacity = 0.6;
+        } catch (err) {
+            console.warn("Error setting brush color:", err);
+            brushIndicator.material.color.set(0x888888);
         }
-        brushIndicator.material.color.set(color);
-        brushIndicator.material.wireframe = false;
-        brushIndicator.material.opacity = 0.6;
     }
 });
 

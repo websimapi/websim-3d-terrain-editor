@@ -194,10 +194,21 @@ export class ColorManager {
                         aspect_ratio: "1:1"
                     });
                     
+                    // Try to upload the image to websim storage to avoid CORS issues
+                    let textureUrl = result.url;
+                    try {
+                        const response = await fetch(result.url);
+                        const blob = await response.blob();
+                        const file = new File([blob], 'texture.jpg', { type: 'image/jpeg' });
+                        textureUrl = await websim.upload(file);
+                    } catch (err) {
+                        console.warn('Could not upload texture to websim storage, using original URL', err);
+                    }
+                    
                     // Display the generated texture
-                    texturePreview.src = result.url;
+                    texturePreview.src = textureUrl;
                     texturePreview.style.display = 'block';
-                    texturePreview.dataset.url = result.url;
+                    texturePreview.dataset.url = textureUrl;
                     saveBtn.disabled = false;
                 } catch (error) {
                     console.error('Error generating texture:', error);
@@ -322,8 +333,13 @@ export class ColorManager {
         const vertex = new THREE.Vector3();
         let colorModified = false;
 
-        // Check if current color is a texture URL
-        const isTextureUrl = this.textureHandler.isTextureUrl(this.currentColor);
+        // Check if current color is a texture URL - with safe error handling
+        let isTextureUrl = false;
+        try {
+            isTextureUrl = this.textureHandler.isTextureUrl(this.currentColor);
+        } catch (err) {
+            console.warn("Error checking texture URL:", err);
+        }
         
         // Apply color to vertices within brush radius
         for (let i = 0; i < positions.count; i++) {
