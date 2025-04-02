@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TerrainDatabase } from './terraindb.js';
 import { PlayerManager } from './players.js';
+import { ColorManager } from './colorManager.js';
 
 // Room setup for multiplayer
 const room = new WebsimSocket();
@@ -11,6 +12,7 @@ let myUsername = '';
 // Will be initialized later
 let terrainDB;
 let playerManager;
+let colorManager;
 
 // --- Scene Setup ---
 const scene = new THREE.Scene();
@@ -234,74 +236,11 @@ function onPointerUpTerrain(event) {
             terrainModified = false;
         }
         
-        // Save color changes if any
-        if (Object.keys(colorChanges).length > 0 && terrainDB) {
-            terrainDB.saveColorChanges(colorChanges);
-            colorChanges = {}; // Reset changes after saving
+        // Save color changes if colorManager exists
+        if (colorManager) {
+            colorManager.saveColorChanges();
         }
     }
-}
-
-// Color palette
-const colorPalette = [
-    { hex: '#66aa66', name: 'Grass Green' },
-    { hex: '#228B22', name: 'Forest Green' },
-    { hex: '#8B4513', name: 'Brown' },
-    { hex: '#A0522D', name: 'Sienna' },
-    { hex: '#C2B280', name: 'Sand' },
-    { hex: '#F5DEB3', name: 'Wheat' },
-    { hex: '#7393B3', name: 'Blue Gray' },
-    { hex: '#FFFFFF', name: 'Snow' },
-    { hex: '#808080', name: 'Gray' },
-    { hex: '#2F4F4F', name: 'Dark Slate' },
-    { hex: '#000000', name: 'Black' },
-    { hex: '#8A9A5B', name: 'Moss Green' }
-];
-
-let currentColor = colorPalette[0].hex;
-let colorChanges = {};
-
-function initializeColorPalette() {
-    const swatchesContainer = document.getElementById('colorSwatches');
-    swatchesContainer.innerHTML = ''; // Clear any existing swatches
-    
-    colorPalette.forEach(color => {
-        const swatch = document.createElement('div');
-        swatch.className = 'color-swatch';
-        swatch.style.backgroundColor = color.hex;
-        swatch.title = color.name;
-        swatch.dataset.color = color.hex;
-        
-        // Mark the first color as active by default
-        if (color.hex === currentColor) {
-            swatch.classList.add('active');
-        }
-        
-        swatch.addEventListener('click', (e) => {
-            // Prevent brush application when clicking color
-            e.stopPropagation();
-            
-            // Update active swatch
-            document.querySelectorAll('.color-swatch').forEach(s => {
-                s.classList.remove('active');
-            });
-            swatch.classList.add('active');
-            
-            // Update current color
-            currentColor = color.hex;
-            
-            // Switch to color tool automatically
-            currentTool = 'color';
-            updateActiveButton();
-            
-            // Update brush indicator color
-            brushIndicator.material.color.set(currentColor);
-            brushIndicator.material.wireframe = false;
-            brushIndicator.material.opacity = 0.6;
-        });
-        
-        swatchesContainer.appendChild(swatch);
-    });
 }
 
 function applyBrush() {
@@ -319,28 +258,11 @@ function applyBrush() {
         const positions = geometry.attributes.position;
         const vertex = new THREE.Vector3();
         let vertexModified = false;
-        let colorModified = false;
 
-        // Initialize color attribute if using color tool for the first time
-        if (currentTool === 'color' && (!geometry.attributes.color || !material.vertexColors)) {
-            if (!geometry.attributes.color) {
-                const colors = new Float32Array(positions.count * 3);
-                // Initialize with default terrain color (light green)
-                for (let i = 0; i < colors.length; i += 3) {
-                    colors[i] = 0.4;     // R
-                    colors[i + 1] = 0.6;  // G
-                    colors[i + 2] = 0.4;  // B
-                }
-                geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-            }
-            
-            // Enable vertex colors on the material
-            material.vertexColors = true;
-            material.needsUpdate = true;
+        // Handle color tool differently - delegate to ColorManager
+        if (currentTool === 'color' && colorManager) {
+            return colorManager.applyColorBrush(hitPoint, brushRadius, brushStrength);
         }
-
-        // Get the color attribute if it exists
-        const colorAttribute = geometry.attributes.color;
 
         // Iterate through all vertices
         for (let i = 0; i < positions.count; i++) {
@@ -370,25 +292,6 @@ function applyBrush() {
                     const newHeight = THREE.MathUtils.lerp(currentHeight, targetFlattenHeight, strengthFactor * 0.5);
                     positions.setY(i, newHeight);
                     vertexModified = true;
-                } else if (currentTool === 'color' && colorAttribute) {
-                    // Apply color with falloff for blending
-                    const color = new THREE.Color(currentColor);
-                    
-                    // If we already have a color, blend with existing
-                    const existingColor = new THREE.Color();
-                    existingColor.fromBufferAttribute(colorAttribute, i);
-                    
-                    // Lerp between existing and new color based on falloff and strength
-                    const blendFactor = falloff * (brushStrength / 5);
-                    existingColor.lerp(color, blendFactor);
-                    
-                    // Apply the color
-                    colorAttribute.setXYZ(i, existingColor.r, existingColor.g, existingColor.b);
-                    
-                    // Store the color change for database
-                    colorChanges[i] = '#' + existingColor.getHexString();
-                    
-                    colorModified = true;
                 }
             }
         }
@@ -400,11 +303,10 @@ function applyBrush() {
             terrainModified = true;
         }
         
-        // If colors were modified, update the color attribute
-        if (colorModified) {
-            colorAttribute.needsUpdate = true;
-        }
+        return vertexModified;
     }
+    
+    return false;
 }
 
 function updateBrushIndicator() {
@@ -421,8 +323,8 @@ function updateBrushIndicator() {
         brushIndicator.visible = (currentTool !== 'select');
         
         // Update color for paint brush
-        if (currentTool === 'color') {
-            brushIndicator.material.color.set(currentColor);
+        if (currentTool === 'color' && colorManager) {
+            brushIndicator.material.color.set(colorManager.currentColor);
             brushIndicator.material.wireframe = false;
             brushIndicator.material.opacity = 0.6;
         } else {
@@ -441,6 +343,18 @@ function onWindowResize() {
     renderer.setSize(window.innerWidth, window.innerHeight);
 }
 
+document.addEventListener('colorChanged', (event) => {
+    const { color, name } = event.detail;
+    // Switch to color tool automatically
+    currentTool = 'color';
+    updateActiveButton();
+    
+    // Update brush indicator color
+    brushIndicator.material.color.set(color);
+    brushIndicator.material.wireframe = false;
+    brushIndicator.material.opacity = 0.6;
+});
+
 // Initialize the database connection and load terrain data
 async function initializeMultiplayer() {
     try {
@@ -451,6 +365,11 @@ async function initializeMultiplayer() {
         // Initialize the terrain database module
         terrainDB = new TerrainDatabase(room, geometry, scene);
         await terrainDB.initialize();
+        
+        // Initialize color manager
+        colorManager = new ColorManager(room, geometry, scene);
+        colorManager.initializeColorPalette();
+        await colorManager.loadColorData();
         
         // Initialize player manager
         playerManager = new PlayerManager(room, scene);
@@ -523,6 +442,5 @@ if (!document.getElementById('colorBtn')) {
     });
 }
 
-initializeColorPalette();
 initializeMultiplayer(); // Initialize multiplayer before starting animation
 animate();

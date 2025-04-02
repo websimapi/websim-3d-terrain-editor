@@ -10,7 +10,6 @@ export class TerrainDatabase {
         this.lastSaveTime = 0;
         this.SAVE_THROTTLE = 2000;
         this.terrainData = null;
-        this.terrainColors = {}; // Track color data for vertices
         this.allTerrainChanges = {}; // Track both by ID and username
         this.myUsername = '';
         this.statusElement = document.getElementById('save-status');
@@ -61,23 +60,6 @@ export class TerrainDatabase {
                 this.applyIncrementalChanges(changesAfterSnapshot);
             }
             
-            // Try to load color data
-            const colorData = await this.room.collection('terrainColorData').getList();
-            if (colorData.length > 0) {
-                const latestColorData = colorData.sort((a, b) => 
-                    new Date(b.created_at) - new Date(a.created_at)
-                )[0];
-                
-                console.log('Found terrain color data from:', new Date(latestColorData.created_at));
-                this.applyColorDataToTerrain(latestColorData.colorData);
-            }
-            
-            // If no data exists, create a flat terrain as the first snapshot
-            if (!baseHeightData && changesAfterSnapshot.length === 0) {
-                console.log('No existing terrain data, creating flat terrain snapshot');
-                await this.createFlatTerrainSnapshot();
-            }
-            
             // Store all change IDs we've applied
             changes.forEach(change => {
                 this.allTerrainChanges[change.id] = true;
@@ -102,21 +84,11 @@ export class TerrainDatabase {
                 }
             });
             
-            // Subscribe to future color changes
-            this.room.collection('terrainColorData').subscribe((colorChanges) => {
-                if (colorChanges.length > 0) {
-                    // Find the latest color update
-                    const latestColorChange = colorChanges.sort((a, b) => 
-                        new Date(b.created_at) - new Date(a.created_at)
-                    )[0];
-                    
-                    // Apply color changes if we haven't seen them before
-                    if (!this.allTerrainChanges[latestColorChange.id]) {
-                        this.applyColorDataToTerrain(latestColorChange.colorData);
-                        this.allTerrainChanges[latestColorChange.id] = true;
-                    }
-                }
-            });
+            // If no data exists, create a flat terrain as the first snapshot
+            if (!baseHeightData && changesAfterSnapshot.length === 0) {
+                console.log('No existing terrain data, creating flat terrain snapshot');
+                await this.createFlatTerrainSnapshot();
+            }
             
         } catch (error) {
             console.error('Error loading terrain data:', error);
@@ -198,57 +170,6 @@ export class TerrainDatabase {
             console.log(`Applied ${changes.length} incremental changes`);
         } else {
             console.warn('No changes were applied to the terrain');
-        }
-    }
-    
-    // Apply color data to terrain
-    applyColorDataToTerrain(colorData) {
-        if (!colorData || typeof colorData !== 'object') {
-            console.error('Invalid color data:', colorData);
-            return;
-        }
-        
-        // Store colors locally
-        this.terrainColors = {...this.terrainColors, ...colorData};
-        
-        // Get the mesh material if it's a mesh
-        const terrainMaterial = this.scene.getObjectByName('terrain').material;
-        
-        // Create vertex colors if they don't exist
-        if (!terrainMaterial.vertexColors) {
-            const geometry = this.geometry;
-            if (!geometry.attributes.color) {
-                const colors = new Float32Array(geometry.attributes.position.count * 3);
-                // Initialize with default terrain color (light green)
-                for (let i = 0; i < colors.length; i += 3) {
-                    colors[i] = 0.4;     // R
-                    colors[i + 1] = 0.6;  // G
-                    colors[i + 2] = 0.4;  // B
-                }
-                geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-            }
-            
-            // Enable vertex colors on the material
-            terrainMaterial.vertexColors = true;
-        }
-        
-        // Update colors based on received data
-        const colorAttribute = this.geometry.attributes.color;
-        let colorModified = false;
-        
-        for (const [vertexIndex, colorHex] of Object.entries(colorData)) {
-            const i = parseInt(vertexIndex);
-            if (isNaN(i) || i < 0 || i >= colorAttribute.count) continue;
-            
-            // Convert hex to RGB (0-1 range)
-            const color = new THREE.Color(colorHex);
-            colorAttribute.setXYZ(i, color.r, color.g, color.b);
-            colorModified = true;
-        }
-        
-        if (colorModified) {
-            colorAttribute.needsUpdate = true;
-            console.log('Applied color data to terrain');
         }
     }
     
@@ -375,30 +296,6 @@ export class TerrainDatabase {
             console.log('Created initial flat terrain snapshot');
         } catch (error) {
             console.error('Error creating flat terrain snapshot:', error);
-        }
-    }
-    
-    // Save color changes to database
-    async saveColorChanges(colorChanges) {
-        if (Object.keys(colorChanges).length === 0) return;
-        
-        try {
-            this.showSaveStatus(true);
-            
-            // Update our local state
-            this.terrainColors = {...this.terrainColors, ...colorChanges};
-            
-            // Save color data to database
-            await this.room.collection('terrainColorData').create({
-                colorData: colorChanges,
-                changeCount: Object.keys(colorChanges).length,
-                timestamp: new Date().toISOString()
-            });
-            
-            this.showSaveStatus(false);
-        } catch (error) {
-            console.error('Error saving color changes:', error);
-            this.showSaveStatus(false, true);
         }
     }
     
