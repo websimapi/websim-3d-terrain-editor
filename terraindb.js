@@ -14,7 +14,7 @@ export class TerrainDatabase {
         this.myUsername = '';
         this.statusElement = document.getElementById('save-status');
         this.strokeStartTime = null;
-        this.userRowId = null; // Store the user's row ID
+        this.userRowId = localStorage.getItem('terrainUserRowId'); // Get from localStorage if available
     }
 
     async initialize() {
@@ -61,6 +61,7 @@ export class TerrainDatabase {
             if (userRow) {
                 console.log(`Found existing terrain row for user ${this.myUsername} with ID ${userRow.id}`);
                 this.userRowId = userRow.id;
+                localStorage.setItem('terrainUserRowId', userRow.id); // Store in localStorage
             } else {
                 console.log(`No terrain row found for user ${this.myUsername}, creating new row`);
                 userRow = await this.room.collection('userTerrain').create({
@@ -69,6 +70,7 @@ export class TerrainDatabase {
                     lastModified: new Date().toISOString()
                 });
                 this.userRowId = userRow.id;
+                localStorage.setItem('terrainUserRowId', userRow.id); // Store in localStorage
                 console.log(`Created new terrain row with ID ${this.userRowId}`);
             }
             
@@ -240,6 +242,7 @@ export class TerrainDatabase {
                             strokeEndTime: strokeEndTime
                         });
                         this.userRowId = newRow.id;
+                        localStorage.setItem('terrainUserRowId', newRow.id); // Store in localStorage
                         console.log(`Created new terrain row with ID ${this.userRowId}`);
                     }
                 } else {
@@ -253,6 +256,7 @@ export class TerrainDatabase {
                         strokeEndTime: strokeEndTime
                     });
                     this.userRowId = newRow.id;
+                    localStorage.setItem('terrainUserRowId', newRow.id); // Store in localStorage
                     console.log(`Created new terrain row with ID ${this.userRowId}`);
                 }
                 

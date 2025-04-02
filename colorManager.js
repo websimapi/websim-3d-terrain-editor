@@ -9,7 +9,7 @@ export class ColorManager {
         this.colorChanges = {};
         this.terrainColors = {};
         this.statusElement = document.getElementById('save-status');
-        this.userColorRowId = null; // Store the user's color row ID
+        this.userColorRowId = localStorage.getItem('colorUserRowId'); // Get from localStorage if available
         
         // Color palette
         this.colorPalette = [
@@ -164,6 +164,7 @@ export class ColorManager {
             if (userRow) {
                 console.log(`Found existing color row for user ${this.myUsername} with ID ${userRow.id}`);
                 this.userColorRowId = userRow.id;
+                localStorage.setItem('colorUserRowId', userRow.id); // Store in localStorage
             } else {
                 console.log(`No color row found for user ${this.myUsername}, creating new row`);
                 userRow = await this.room.collection('userColorData').create({
@@ -172,6 +173,7 @@ export class ColorManager {
                     lastModified: new Date().toISOString()
                 });
                 this.userColorRowId = userRow.id;
+                localStorage.setItem('colorUserRowId', userRow.id); // Store in localStorage
                 console.log(`Created new color row with ID ${this.userColorRowId}`);
             }
             
@@ -239,6 +241,7 @@ export class ColorManager {
                         lastModified: new Date().toISOString()
                     });
                     this.userColorRowId = newRow.id;
+                    localStorage.setItem('colorUserRowId', newRow.id); // Store in localStorage
                     console.log(`Created new color row with ID ${this.userColorRowId}`);
                 }
             } else {
@@ -249,6 +252,8 @@ export class ColorManager {
                     lastModified: new Date().toISOString()
                 });
                 this.userColorRowId = newRow.id;
+                localStorage.setItem('colorUserRowId', newRow.id); // Store in localStorage
+                console.log(`Created new color row with ID ${this.userColorRowId}`);
             }
             
             // Reset changes after saving
