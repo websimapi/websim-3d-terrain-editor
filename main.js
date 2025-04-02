@@ -64,9 +64,32 @@ controls.minDistance = 10;
 controls.maxDistance = 150; // Reduced max distance for better control
 controls.maxPolarAngle = Math.PI / 2.1; // Prevent camera going below horizon
 controls.target.set(0, 0, 0);
-controls.zoomSpeed = 0.2; // Further Reduced zoom speed for smoother scrolling
+controls.zoomSpeed = 0.3; // Reduced from 0.5 for less sensitive zooming
 controls.rotateSpeed = 0.7; // More controlled rotation speed
 controls.panSpeed = 0.8; // Adjusted pan speed
+
+// Add mousewheel event listener for better zoom control
+renderer.domElement.addEventListener('wheel', (event) => {
+    // Prevent default scrolling behavior
+    event.preventDefault();
+    
+    // Calculate zoom direction and apply smoother zoom factor
+    const zoomDirection = event.deltaY > 0 ? 1 : -1;
+    const zoomFactor = 0.05; // Small value for smoother zoom
+    
+    // Apply zoom by moving camera closer or further from target
+    const cameraDirection = new THREE.Vector3().subVectors(camera.position, controls.target).normalize();
+    const distance = camera.position.distanceTo(controls.target);
+    
+    // Calculate new distance with easing for smoother feel
+    let newDistance = distance * (1 + zoomDirection * zoomFactor);
+    
+    // Respect min/max distance constraints
+    newDistance = THREE.MathUtils.clamp(newDistance, controls.minDistance, controls.maxDistance);
+    
+    // Update camera position
+    camera.position.copy(controls.target).addScaledVector(cameraDirection, newDistance);
+}, { passive: false });
 
 // --- Terrain Editing ---
 const raycaster = new THREE.Raycaster();
