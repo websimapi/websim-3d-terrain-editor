@@ -280,4 +280,4 @@ class TerrainDatabase {
 }
 
 // Export the class to be accessible from main.js
-window.TerrainDatabase = TerrainDatabase;
+export { TerrainDatabase };
