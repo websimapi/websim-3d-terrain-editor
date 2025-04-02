@@ -346,6 +346,8 @@ async function initializeMultiplayer() {
         setInterval(() => {
             playerManager.updatePlayerPosition(camera, controls);
         }, 100);
+        
+        console.log("Multiplayer initialization complete, terrain data loaded");
     } catch (error) {
         console.error('Error initializing multiplayer:', error);
     }

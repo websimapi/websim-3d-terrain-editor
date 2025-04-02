@@ -44,45 +44,47 @@ export class TerrainDatabase {
             }
             
             // Get all incremental changes after the snapshot
-            let changes = [];
+            const changes = await this.room.collection('terrainChange').getList();
+            let changesAfterSnapshot = changes;
             if (snapshotTime) {
                 // Get all changes after the snapshot timestamp
-                changes = await this.room.collection('terrainChange').getList();
-                changes = changes.filter(change => 
+                changesAfterSnapshot = changes.filter(change => 
                     new Date(change.created_at) > snapshotTime
                 );
-            } else {
-                changes = await this.room.collection('terrainChange').getList();
             }
                 
-            if (changes.length > 0) {
-                console.log(`Applying ${changes.length} changes after snapshot`);
+            if (changesAfterSnapshot.length > 0) {
+                console.log(`Applying ${changesAfterSnapshot.length} changes after snapshot`);
                 // Sort changes chronologically before applying
-                changes.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
-                this.applyIncrementalChanges(changes);
+                changesAfterSnapshot.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+                this.applyIncrementalChanges(changesAfterSnapshot);
             }
             
             // If no data exists, create a flat terrain as the first snapshot
-            if (!baseHeightData && changes.length === 0) {
+            if (!baseHeightData && changesAfterSnapshot.length === 0) {
                 console.log('No existing terrain data, creating flat terrain snapshot');
                 await this.createFlatTerrainSnapshot();
             }
             
+            // Store all change IDs we've applied
+            changes.forEach(change => {
+                this.allTerrainChanges[change.id] = true;
+            });
+            
             // Subscribe to future terrain changes
             this.room.collection('terrainChange').subscribe((changes) => {
-                // Filter out own changes - we've already applied them locally
-                const otherChanges = changes.filter(change => 
-                    change.username !== this.myUsername &&
-                    !this.allTerrainChanges[change.id] // Don't apply changes we've already processed
+                // Filter out changes we've already processed
+                const newChanges = changes.filter(change => 
+                    !this.allTerrainChanges[change.id]
                 );
                 
-                if (otherChanges.length > 0) {
+                if (newChanges.length > 0) {
                     // Sort by creation time before applying
-                    otherChanges.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
-                    this.applyIncrementalChanges(otherChanges);
+                    newChanges.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+                    this.applyIncrementalChanges(newChanges);
                     
                     // Track these changes to avoid reapplying
-                    otherChanges.forEach(change => {
+                    newChanges.forEach(change => {
                         this.allTerrainChanges[change.id] = true;
                     });
                 }
@@ -157,12 +159,6 @@ export class TerrainDatabase {
                 
                 // Track this change to avoid reapplying
                 this.allTerrainChanges[change.id] = true;
-                
-                // For user-based analytics (optional)
-                if (!this.allTerrainChanges[change.username]) {
-                    this.allTerrainChanges[change.username] = [];
-                }
-                this.allTerrainChanges[change.username].push(change);
             } catch (error) {
                 console.error('Error applying terrain change:', error);
             }
