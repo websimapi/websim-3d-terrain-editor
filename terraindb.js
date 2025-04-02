@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 
-class TerrainDatabase {
+export class TerrainDatabase {
     constructor(room, geometry, scene) {
         this.room = room;
         this.geometry = geometry;
@@ -13,6 +13,7 @@ class TerrainDatabase {
         this.allTerrainChanges = {};
         this.myUsername = '';
         this.statusElement = document.getElementById('save-status');
+        this.strokeStartTime = null;
     }
 
     async initialize() {
@@ -24,7 +25,7 @@ class TerrainDatabase {
     async loadTerrainData() {
         try {
             // First try to get the latest terrain snapshot
-            const snapshots = await this.room.collection('terrainSnapshot').filter({}).getList();
+            const snapshots = await this.room.collection('terrainSnapshot').getList();
             let baseHeightData = null;
             let snapshotTime = null;
             
@@ -43,12 +44,15 @@ class TerrainDatabase {
             }
             
             // Get all incremental changes after the snapshot
-            const query = snapshotTime ? 
-                { created_at: { $gt: snapshotTime.toISOString() } } : 
-                {};
+            let changes = [];
+            if (snapshotTime) {
+                changes = await this.room.collection('terrainChange').filter({
+                    created_at: { $gt: snapshotTime.toISOString() }
+                }).getList();
+            } else {
+                changes = await this.room.collection('terrainChange').getList();
+            }
                 
-            const changes = await this.room.collection('terrainChange').filter(query).getList();
-            
             if (changes.length > 0) {
                 console.log(`Applying ${changes.length} changes after snapshot`);
                 this.applyIncrementalChanges(changes);
@@ -78,7 +82,10 @@ class TerrainDatabase {
     
     // Apply a full height data map to the terrain geometry
     applyHeightDataToTerrain(heightData) {
-        if (!heightData) return;
+        if (!heightData || typeof heightData !== 'object') {
+            console.error('Invalid height data:', heightData);
+            return;
+        }
         
         const positions = this.geometry.attributes.position;
         let applied = false;
@@ -137,19 +144,12 @@ class TerrainDatabase {
         }
     }
     
-    // Save changes made to the terrain
-    async saveTerrainChanges(geometry) {
-        const now = Date.now();
-        if (now - this.lastSaveTime < this.SAVE_THROTTLE) {
-            // If we've saved recently, schedule another save
-            if (this.saveTimeout) clearTimeout(this.saveTimeout);
-            this.saveTimeout = setTimeout(() => this.saveTerrainChanges(geometry), this.SAVE_THROTTLE);
-            return;
-        }
+    // Save changes with timestamps for stroke begin and end
+    async saveTerrainChangesWithTimestamp(geometry) {
+        const strokeEndTime = new Date().toISOString();
         
         try {
             this.showSaveStatus(true);
-            this.lastSaveTime = now;
             
             // Compare current geometry to the last saved version
             // and only save the vertices that have changed
@@ -182,11 +182,15 @@ class TerrainDatabase {
             if (changeCount > 0) {
                 console.log(`Saving ${changeCount} changed vertices`);
                 
+                // Use current time as stroke start if none set
+                const strokeStartTime = this.strokeStartTime || new Date().toISOString();
+                
                 // Save just the changes (not the entire terrain) for efficiency
                 await this.room.collection('terrainChange').create({
                     changes: changedVertices,
                     changeCount: changeCount,
-                    timestamp: new Date().toISOString()
+                    strokeStartTime: strokeStartTime,
+                    strokeEndTime: strokeEndTime
                 });
                 
                 // Periodically save a full snapshot for faster loading
@@ -201,9 +205,12 @@ class TerrainDatabase {
             }
             
             this.showSaveStatus(false);
+            // Reset stroke start time
+            this.strokeStartTime = null;
         } catch (error) {
             console.error('Error saving terrain changes:', error);
             this.showSaveStatus(false, true);
+            this.strokeStartTime = null;
         }
     }
     

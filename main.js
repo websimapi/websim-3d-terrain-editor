@@ -207,6 +207,11 @@ function onPointerDownTerrain(event) {
     if (event.button !== 0) return;
 
     isMouseDown = true;
+    // Record stroke start time when brush is applied
+    if (currentTool !== 'select' && terrainDB) {
+        terrainDB.strokeStartTime = new Date().toISOString();
+    }
+    
     // Only disable camera controls when not in selection mode
     if (currentTool !== 'select') {
         controls.enabled = false; // Disable camera controls while editing
@@ -222,8 +227,12 @@ function onPointerUpTerrain(event) {
     if (event.button === 0 && isMouseDown) {
         isMouseDown = false;
         controls.enabled = true; // Re-enable camera controls
-        // Optional: Recompute normals once after finishing a drag for potentially better performance
-        // geometry.computeVertexNormals();
+        
+        // Save terrain changes on end of stroke
+        if (terrainModified) {
+            terrainDB.saveTerrainChangesWithTimestamp(geometry);
+            terrainModified = false;
+        }
     }
 }
 
@@ -309,10 +318,6 @@ function applyBrush() {
             positions.needsUpdate = true;
             geometry.computeVertexNormals(); // Recompute normals for correct lighting
             terrainModified = true; // Mark for saving
-            
-            // Schedule a save after modifications
-            if (saveTimeout) clearTimeout(saveTimeout);
-            saveTimeout = setTimeout(() => terrainDB.saveTerrainChanges(geometry), 500);
         }
     }
 }
