@@ -192,6 +192,8 @@ async function onPointerUpTerrain(event) {
             } catch (error) {
                 console.error("Failed to save height state:", error);
             }
+        } else if (isMouseDown && currentTool !== 'select' && !terrainHeightModifiedInStroke){
+             console.log("Stroke ended, no height changes detected in this stroke.")
         }
 
         if (terrainColorModifiedInStroke && colorManager) {
@@ -202,6 +204,8 @@ async function onPointerUpTerrain(event) {
              } catch(error) {
                  console.error("Failed to save color state:", error);
              }
+        } else if (isMouseDown && currentTool === 'color' && !terrainColorModifiedInStroke){
+            console.log("Stroke ended, no color changes detected in this stroke.")
         }
     }
 }
@@ -251,7 +255,7 @@ function applyBrush() {
                 } else if (currentTool === 'lower') {
                     newHeight = currentHeight - effectiveStrength;
                 } else if (currentTool === 'flatten') {
-                     newHeight = THREE.MathUtils.lerp(currentHeight, targetFlattenHeight, effectiveStrength * 0.5); 
+                     newHeight = THREE.MathUtils.lerp(currentHeight, targetFlattenHeight, falloff * brushStrength * 0.1); 
                 }
 
                 newHeight = Math.max(-50, Math.min(newHeight, 100)); 
@@ -316,9 +320,10 @@ function onWindowResize() {
 }
 
 document.addEventListener('colorChanged', (event) => {
+    console.log(`Color changed to: ${event.detail.color}, switching tool to 'color'`);
     currentTool = 'color';
-    updateActiveButton(); 
-    updateBrushIndicatorPositionAndStyle(false); 
+    updateActiveButton(); // Update UI to show 'Paint' as active
+    updateBrushIndicatorPositionAndStyle(false); // Update brush appearance immediately
 });
 
 async function initializeMultiplayer() {
@@ -331,40 +336,26 @@ async function initializeMultiplayer() {
         console.log("Initializing Color Manager...");
         colorManager = new ColorManager(room, geometry, scene);
         colorManager.initializeColorPalette(); 
-        await colorManager.loadColorData(); 
+        await colorManager.loadColorData(); // Loads existing colors or sets defaults
         console.log("Color Manager initialized.");
 
         console.log("Initializing Terrain Database...");
         terrainDB = new TerrainDatabase(room, geometry, scene);
-        await terrainDB.loadTerrainData(); 
+        await terrainDB.loadTerrainData(); // Loads existing height or creates flat
         console.log("Terrain Database initialized.");
 
         console.log("Initializing Player Manager...");
         playerManager = new PlayerManager(room, scene);
-        playerManager.initialize(); 
+        playerManager.initialize(); // Sets up presence
         console.log("Player Manager initialized.");
 
         setInterval(() => {
             if (playerManager) {
                 playerManager.updatePlayerPosition(camera, controls);
             }
-        }, 200); 
+        }, 200); // Send updates every 200ms
 
-        console.log("Multiplayer initialization complete. Performing final geometry updates.");
-
-        if (geometry.attributes.position) {
-             geometry.attributes.position.needsUpdate = true;
-             console.log("Position attribute marked needsUpdate.");
-        }
-        if (geometry.attributes.color) {
-             geometry.attributes.color.needsUpdate = true;
-             console.log("Color attribute marked needsUpdate.");
-        }
-        console.log("Computing final vertex normals...");
-        geometry.computeVertexNormals();
-        console.log("Vertex normals computed.");
-
-        console.log("Final geometry setup complete.");
+        console.log("Multiplayer initialization complete.");
     } catch (error) {
         console.error('Error initializing multiplayer:', error);
         const status = document.getElementById('save-status');
@@ -391,8 +382,7 @@ function animate() {
 updateSliderValue(brushSizeSlider, brushSizeValueSpan);
 updateSliderValue(brushStrengthSlider, brushStrengthValueSpan);
 updateSliderValue(flattenHeightSlider, flattenHeightValueSpan);
-
 updateActiveButton(); 
 
-initializeMultiplayer(); 
-animate(); 
+initializeMultiplayer();
+animate();

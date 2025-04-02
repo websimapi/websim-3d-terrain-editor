@@ -126,6 +126,9 @@ export class ColorManager {
                 colorAttribute.setXYZ(i, existingColor.r, existingColor.g, existingColor.b);
 
                 // Store the change for this stroke using the exact hex
+                // NOTE: Storing LERPed hex might create many unique colors.
+                // Consider storing the target color hex if instant paint is acceptable.
+                // For now, keep the blended color.
                 const newHex = '#' + existingColor.getHexString();
                 this.currentStrokeColorChanges[i] = newHex;
                 // Also update the canonical state cache immediately for consistency
@@ -233,7 +236,6 @@ export class ColorManager {
         let verticesDefaulted = 0;
         const defaultColor = new THREE.Color(this.colorPalette[0].hex); // Fallback color (Grass Green)
         const defaultColorHex = this.colorPalette[0].hex;
-        let bufferChanged = false;
 
         // Clear current local state cache before applying the new one
         this.terrainColors = {};
@@ -261,14 +263,8 @@ export class ColorManager {
                 verticesDefaulted++;
             }
 
-            // Get current buffer color for comparison (optional, for logging change)
-            // const currentBufferColor = new THREE.Color().fromBufferAttribute(colorAttribute, i);
-
             // Set color in the buffer attribute
             colorAttribute.setXYZ(i, targetColor.r, targetColor.g, targetColor.b);
-
-            // Check if buffer value actually changed (optional)
-            // if (!currentBufferColor.equals(targetColor)) { bufferChanged = true; }
 
             // Ensure local cache matches exactly what's applied, including defaults
             this.terrainColors[i] = appliedColorHex;
@@ -300,6 +296,7 @@ export class ColorManager {
                 this.canonicalColorRecordId = latestState.id; // Store the ID
                 console.log(`Found latest color state record: ID=${this.canonicalColorRecordId}, Timestamp=${latestState.timestamp}`);
                 this.applyColorState(latestState); // Apply initial state (sets needsUpdate)
+                console.log("Initial color state applied. colorAttribute.needsUpdate should be true.");
             } else {
                 console.log("No canonical color state found. Initializing terrain with default colors.");
                 // Initialize terrainColors with default if no state exists, but don't save yet
@@ -307,6 +304,7 @@ export class ColorManager {
                 this.initializeDefaultColors(true); // Pass true to force apply to geometry buffer
                 // We won't create the record here, the first save operation will do it.
                 this.initialLoadCreatedState = true; // Mark that default state was applied due to no record
+                console.log("Default colors applied. colorAttribute.needsUpdate should be true.");
             }
 
             // Subscribe to future updates
@@ -336,10 +334,11 @@ export class ColorManager {
                     }
 
                     if (shouldApply) {
-                        if (this.applyColorState(updatedState)) {
-                            // Geometry update (needsUpdate) handled within applyColorState
-                            console.log("Geometry color updated from subscription.");
-                        }
+                        // applyColorState now always sets needsUpdate=true if it applies data
+                        this.applyColorState(updatedState);
+                        // No need to compute normals for color changes
+                        console.log("Geometry color updated from subscription.");
+
                     }
                 } else {
                     console.warn("Canonical color state subscription returned empty list. This might indicate the record was deleted.");

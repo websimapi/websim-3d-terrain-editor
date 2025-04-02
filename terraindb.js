@@ -41,13 +41,15 @@ export class TerrainDatabase {
                 latestState = states.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
                 this.canonicalHeightRecordId = latestState.id; // Store the ID
                 console.log(`Applying initial height state: ID=${this.canonicalHeightRecordId}, Timestamp=${latestState.timestamp}`);
-                this.applyHeightState(latestState); // Apply the initial state - THIS NOW SETS needsUpdate
+                this.applyHeightState(latestState); // Apply the initial state
+                console.log("Initial height state applied. positions.needsUpdate should be true.");
             } else {
                 console.log("No canonical terrain height state found. Creating initial flat terrain state record.");
                 // If no state exists, initialize geometry to flat and create the first record
                 await this.createFlatTerrainStateRecord(); // This sets geometry and saves the first state
                 positions.needsUpdate = true; // Ensure update after manual flattening in createFlat
                 this.initialLoadCreatedState = true; // Mark that we created the initial state
+                console.log("Initial flat state created. positions.needsUpdate should be true.");
             }
 
             // Subscribe to future updates
@@ -82,11 +84,11 @@ export class TerrainDatabase {
                     }
 
                     if (shouldApply) {
-                        if (this.applyHeightState(updatedState)) { // Apply the full state
-                            // applyHeightState now handles needsUpdate=true internally
-                            this.geometry.computeVertexNormals(); // Recompute normals after applying update
-                            console.log("Geometry updated from height subscription.");
-                        }
+                        // applyHeightState now always sets needsUpdate=true if it applies data
+                        this.applyHeightState(updatedState);
+                        // Recompute normals *after* applying the update
+                        this.geometry.computeVertexNormals();
+                        console.log("Geometry updated and normals recomputed from height subscription.");
                     }
 
                 } else {
@@ -111,7 +113,9 @@ export class TerrainDatabase {
             console.log("Computing vertex normals after initial terrain height load/create.");
             this.geometry.computeVertexNormals();
             // Ensure the geometry is visually updated in the renderer in the next frame
-            positions.needsUpdate = true; // Set again for safety, ensures update regardless of path
+            // This should already be set by applyHeightState or createFlatTerrainStateRecord
+            // but set again for absolute certainty.
+            positions.needsUpdate = true;
             console.log("Final position attribute marked needsUpdate after terrain height load.");
         }
     }
@@ -136,7 +140,8 @@ export class TerrainDatabase {
         const loadedHeightData = stateData.heightData || {};
         const numLoadedKeys = Object.keys(loadedHeightData).length;
         console.log(`State contains ${numLoadedKeys} height entries.`);
-        let changeOccurredInCall = false; // Track if any vertex *buffer value* actually changed in this call
+        let verticesApplied = 0;
+        let verticesDefaulted = 0;
 
         // Clear local cache before applying the new state data
         this.terrainHeightData = {};
@@ -146,33 +151,28 @@ export class TerrainDatabase {
             const loadedHeight = loadedHeightData[i];
             // Default to 0 height if undefined or null in the loaded data
             const targetHeight = (loadedHeight !== undefined && loadedHeight !== null) ? Number(loadedHeight) : 0;
-            const currentGeometryHeight = positions.getY(i); // Get current height JUST for comparison/logging
 
-            // *** ALWAYS set the geometry buffer from the loaded state data ***
-            // This ensures the buffer matches the canonical state, regardless of previous buffer state.
+            // Set the geometry buffer Y coordinate from the loaded state data
             positions.setY(i, targetHeight);
-
-            // Check if this application actually changed the geometry buffer value compared to before *this specific call*.
-            if (Math.abs(currentGeometryHeight - targetHeight) > 0.0001) {
-                changeOccurredInCall = true; // Mark that the geometry buffer value was altered by this call
-            }
 
             // Update local cache to match the applied state
             this.terrainHeightData[i] = targetHeight;
 
-            // Optional: Add verbose logging during initial load if needed for debugging
-            // if (this.isLoading) {
-            //    console.log(` Load ApplyHeight[${i}]: Loaded=${loadedHeight}, Target=${targetHeight}, PrevGeom=${currentGeometryHeight}, Changed=${Math.abs(currentGeometryHeight - targetHeight) > 0.0001}`);
-            // }
+            // Track counts for logging
+            if (loadedHeight !== undefined && loadedHeight !== null) {
+                verticesApplied++;
+            } else {
+                verticesDefaulted++;
+            }
         }
 
         // *** ALWAYS mark the position attribute as needing update after applying a full state ***
         positions.needsUpdate = true;
 
-        console.log(`Applied height state (TS: ${stateData.timestamp}). Geometry buffer updated directly. Buffer value changes detected: ${changeOccurredInCall}`);
+        console.log(`Applied height state (TS: ${stateData.timestamp}). ${verticesApplied} vertices from data, ${verticesDefaulted} defaulted. Geometry buffer updated directly. Marked needsUpdate=true.`);
         this.lastAppliedTimestamp = stateData.timestamp; // Track the timestamp of applied data
 
-        // Return true indicating the buffer was potentially modified and needsUpdate was set.
+        // Return true indicating the buffer was modified and needsUpdate was set.
         return true;
     }
 
