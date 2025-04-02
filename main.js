@@ -58,38 +58,15 @@ scene.add(terrain);
 // --- Controls ---
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true; // Smooth camera movement
-controls.dampingFactor = 0.1; // Increased for more responsive damping
+controls.dampingFactor = 0.05; // Further adjusted damping for smoothness
 controls.screenSpacePanning = true; // Better panning behavior
-controls.minDistance = 10;
+controls.minDistance = 5; // Lower min distance
 controls.maxDistance = 150; // Reduced max distance for better control
 controls.maxPolarAngle = Math.PI / 2.1; // Prevent camera going below horizon
 controls.target.set(0, 0, 0);
-controls.zoomSpeed = 0.3; // Reduced from 0.5 for less sensitive zooming
-controls.rotateSpeed = 0.7; // More controlled rotation speed
-controls.panSpeed = 0.8; // Adjusted pan speed
-
-// Add mousewheel event listener for better zoom control
-renderer.domElement.addEventListener('wheel', (event) => {
-    // Prevent default scrolling behavior
-    event.preventDefault();
-    
-    // Calculate zoom direction and apply smoother zoom factor
-    const zoomDirection = event.deltaY > 0 ? 1 : -1;
-    const zoomFactor = 0.05; // Small value for smoother zoom
-    
-    // Apply zoom by moving camera closer or further from target
-    const cameraDirection = new THREE.Vector3().subVectors(camera.position, controls.target).normalize();
-    const distance = camera.position.distanceTo(controls.target);
-    
-    // Calculate new distance with easing for smoother feel
-    let newDistance = distance * (1 + zoomDirection * zoomFactor);
-    
-    // Respect min/max distance constraints
-    newDistance = THREE.MathUtils.clamp(newDistance, controls.minDistance, controls.maxDistance);
-    
-    // Update camera position
-    camera.position.copy(controls.target).addScaledVector(cameraDirection, newDistance);
-}, { passive: false });
+controls.zoomSpeed = 0.5; // Adjusted zoom speed - lower value makes zoom less sensitive
+controls.rotateSpeed = 0.5; // Adjusted rotation speed
+controls.panSpeed = 0.5; // Adjusted pan speed
 
 // --- Terrain Editing ---
 const raycaster = new THREE.Raycaster();
@@ -144,41 +121,52 @@ toolButtons.forEach(button => {
     });
 });
 
-window.addEventListener('mousemove', onMouseMove, false);
-window.addEventListener('mousedown', onMouseDown, false);
-window.addEventListener('mouseup', onMouseUp, false);
+// Renamed from onMouseMove to avoid confusion with editing logic
+renderer.domElement.addEventListener('pointermove', onPointerMoveTerrainCheck, false);
+// Use pointer events for better consistency across devices
+renderer.domElement.addEventListener('pointerdown', onPointerDownTerrain, false);
+window.addEventListener('pointerup', onPointerUpTerrain, false); // Listen on window to catch release outside canvas
 window.addEventListener('resize', onWindowResize, false);
-// Prevent context menu on right-click (useful if adding more mouse interactions later)
+// Prevent context menu on right-click
 renderer.domElement.addEventListener('contextmenu', (event) => event.preventDefault());
 
 // --- Event Handlers ---
-function onMouseMove(event) {
+// Renamed handler for clarity
+function onPointerMoveTerrainCheck(event) {
     // Calculate mouse position in normalized device coordinates (-1 to +1)
     mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
     mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
 
-    updateBrushIndicator(); // Update indicator position even if not editing
+    updateBrushIndicator(); // Update indicator position
 
     if (isMouseDown) {
         applyBrush();
     }
 }
 
-function onMouseDown(event) {
+// Renamed handler for clarity
+function onPointerDownTerrain(event) {
     // Ignore clicks if the mouse is over the controls panel
-    if (event.target.closest('#controls')) return;
-    // Check if the click originated on the canvas
+    const controlsPanel = document.getElementById('controls');
+    if (controlsPanel && controlsPanel.contains(event.target)) return;
+    // Check if the click originated on the canvas (redundant with listener on domElement, but safe)
     if (event.target !== renderer.domElement) return;
+    // Ignore right clicks or middle clicks for editing
+    if (event.button !== 0) return;
 
     isMouseDown = true;
     controls.enabled = false; // Disable camera controls while editing
+    // Ensure brush indicator updates immediately on click
+    updateBrushIndicator();
     applyBrush(); // Apply brush on the first click
 }
 
-function onMouseUp() {
-    if (isMouseDown) {
+// Renamed handler for clarity
+function onPointerUpTerrain(event) {
+    // Only act if the left mouse button was released and we were editing
+    if (event.button === 0 && isMouseDown) {
         isMouseDown = false;
-        controls.enabled = true; // Re-enable camera controls only if editing was active
+        controls.enabled = true; // Re-enable camera controls
         // Optional: Recompute normals once after finishing a drag for potentially better performance
         // geometry.computeVertexNormals();
     }
@@ -278,7 +266,7 @@ function onWindowResize() {
 function animate() {
     requestAnimationFrame(animate);
 
-    controls.update(); // Required for damping
+    controls.update(); // REQUIRED: Required for damping and zoom smoothing from OrbitControls
 
     // Update brush indicator visibility based on mouse interaction state potentially
     // (e.g., hide when mouse is up and not over canvas) - current logic keeps it based on raycast hit
