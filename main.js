@@ -52,20 +52,17 @@ const terrainSegments = 128; // Increased detail
 const geometry = new THREE.PlaneGeometry(terrainSize, terrainSize, terrainSegments, terrainSegments);
 geometry.rotateX(-Math.PI / 2); // Rotate to be horizontal
 
-// Vertices will be set during initialization by TerrainDatabase/ColorManager
-geometry.computeVertexNormals(); // Initial computation
-
 let currentTool = 'raise'; // 'select', 'raise', 'lower', 'flatten', 'color'
 const brushIndicator = new THREE.Mesh(
     new THREE.SphereGeometry(1, 16, 8),
-    new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, opacity: 0.5, transparent: true })
+    new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, opacity: 0.5, transparent: true, depthTest: false, depthWrite: false }) // Added depthTest/Write false
 );
+brushIndicator.renderOrder = 1; // Render brush on top
 brushIndicator.visible = false;
 scene.add(brushIndicator);
 
 // Material setup - vertexColors will be enabled by ColorManager if needed
 const material = new THREE.MeshStandardMaterial({
-    // color: 0xffffff, // Base color ignored when vertexColors is true
     side: THREE.DoubleSide,
     metalness: 0.0,
     roughness: 0.9,
@@ -118,8 +115,7 @@ function updateActiveButton() {
         }
     });
     flattenHeightControl.style.display = currentTool === 'flatten' ? 'flex' : 'none';
-    // Update brush indicator immediately when tool changes
-    updateBrushIndicator();
+    updateBrushIndicatorVisibility(); // Changed from updateBrushIndicator
 }
 
 // --- Event Listeners ---
@@ -127,7 +123,6 @@ brushSizeSlider.addEventListener('input', () => updateSliderValue(brushSizeSlide
 brushStrengthSlider.addEventListener('input', () => updateSliderValue(brushStrengthSlider, brushStrengthValueSpan));
 flattenHeightSlider.addEventListener('input', () => updateSliderValue(flattenHeightSlider, flattenHeightValueSpan));
 
-// Add listener for all tool buttons
 toolButtons.forEach(button => {
     button.addEventListener('click', (e) => {
         e.stopPropagation(); // Prevent event bubbling
@@ -144,22 +139,17 @@ renderer.domElement.addEventListener('contextmenu', (event) => event.preventDefa
 
 // --- Event Handlers ---
 function onPointerMoveTerrainCheck(event) {
-    // Prevent interaction if clicking on UI elements overlaying the canvas
     const controlsPanel = document.getElementById('controls');
     const playersPanel = document.getElementById('players-list');
-    if ( (controlsPanel && controlsPanel.contains(event.target)) ||
-         (playersPanel && playersPanel.contains(event.target)) ) {
-        brushIndicator.visible = false; // Hide brush if pointer is over UI
-        return;
-    }
-
+    const isOverUI = (controlsPanel && controlsPanel.contains(event.target)) ||
+                     (playersPanel && playersPanel.contains(event.target));
 
     mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
     mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
 
-    updateBrushIndicator(); // Update indicator position/visibility
+    updateBrushIndicatorPositionAndStyle(isOverUI);
 
-    if (isMouseDown && currentTool !== 'select') {
+    if (isMouseDown && currentTool !== 'select' && !isOverUI) {
         applyBrush();
     }
 }
@@ -176,42 +166,39 @@ function onPointerDownTerrain(event) {
 
     isMouseDown = true;
 
-    // Reset modification flags for the new stroke
     terrainHeightModifiedInStroke = false;
     terrainColorModifiedInStroke = false;
 
     if (currentTool !== 'select') {
-        controls.enabled = false; // Disable camera pan/rotate while editing
-        updateBrushIndicator(); // Ensure indicator is visible
-        applyBrush(); // Apply brush on the first click immediately
+        controls.enabled = false; 
+        updateBrushIndicatorVisibility(); 
+        applyBrush(); 
     } else {
-         controls.enabled = true; // Ensure camera is enabled in select mode
+         controls.enabled = true; 
+         updateBrushIndicatorVisibility(); 
     }
 }
 
-async function onPointerUpTerrain(event) { // Make async to await saves
+async function onPointerUpTerrain(event) { 
     if (event.button === 0 && isMouseDown) {
         isMouseDown = false;
-        controls.enabled = true; // Re-enable camera controls
+        controls.enabled = true; 
 
-        // Save terrain height changes if any occurred during the stroke
         if (terrainHeightModifiedInStroke && terrainDB) {
             console.log("Stroke ended, saving height state...");
             try {
-                await terrainDB.saveTerrainChanges(); // Await the save operation
-                terrainHeightModifiedInStroke = false; // Reset flag on successful save
+                await terrainDB.saveTerrainChanges(); 
+                terrainHeightModifiedInStroke = false; 
             } catch (error) {
                 console.error("Failed to save height state:", error);
-                // Handle error, maybe keep the flag true to retry?
             }
         }
 
-        // Save terrain color changes if any occurred during the stroke
         if (terrainColorModifiedInStroke && colorManager) {
             console.log("Stroke ended, saving color state...");
              try {
-                await colorManager.saveColorChanges(); // Await the save operation
-                terrainColorModifiedInStroke = false; // Reset flag on successful save
+                await colorManager.saveColorChanges(); 
+                terrainColorModifiedInStroke = false; 
              } catch(error) {
                  console.error("Failed to save color state:", error);
              }
@@ -219,9 +206,8 @@ async function onPointerUpTerrain(event) { // Make async to await saves
     }
 }
 
-
 function applyBrush() {
-    if (currentTool === 'select') return; // Don't apply brush if selecting
+    if (currentTool === 'select') return; 
 
     raycaster.setFromCamera(mouse, camera);
     const intersects = raycaster.intersectObject(terrain);
@@ -236,22 +222,18 @@ function applyBrush() {
 
         const positions = geometry.attributes.position;
         const vertex = new THREE.Vector3();
-        let vertexModified = false; // Tracks if any vertex was changed in *this specific call*
+        let geometryAttributeChanged = false; 
 
-        // --- Color Application ---
         if (currentTool === 'color' && colorManager) {
             const appliedColor = colorManager.applyColorBrush(hitPoint, brushRadius, brushStrength);
             if (appliedColor) {
-                terrainColorModifiedInStroke = true; // Mark that color was changed in this stroke
-                vertexModified = true; // Indicate geometry update needed
+                terrainColorModifiedInStroke = true; 
+                geometryAttributeChanged = true; 
             }
-            // Don't apply height changes if painting
-            // Normals don't change with color, geometry update handled by ColorManager
-            return; // Stop here if painting
+            return; 
         }
 
-        // --- Height Application ---
-        let heightChanged = false;
+        let heightChangedInCall = false;
         for (let i = 0; i < positions.count; i++) {
             vertex.fromBufferAttribute(positions, i);
             const dx = vertex.x - hitPoint.x;
@@ -260,62 +242,64 @@ function applyBrush() {
 
             if (distance < brushRadius) {
                 const falloff = Math.cos((distance / brushRadius) * Math.PI / 2);
-                const strengthFactor = brushStrength * falloff * 0.15; // Base strength adjustment
+                const effectiveStrength = brushStrength * Math.pow(falloff, 2) * 0.15; 
                 const currentHeight = positions.getY(i);
                 let newHeight = currentHeight;
 
                 if (currentTool === 'raise') {
-                    newHeight = currentHeight + strengthFactor;
+                    newHeight = currentHeight + effectiveStrength;
                 } else if (currentTool === 'lower') {
-                    newHeight = currentHeight - strengthFactor;
+                    newHeight = currentHeight - effectiveStrength;
                 } else if (currentTool === 'flatten') {
-                     // Lerp towards target height based on strength/falloff
-                    newHeight = THREE.MathUtils.lerp(currentHeight, targetFlattenHeight, strengthFactor * 0.5);
+                     newHeight = THREE.MathUtils.lerp(currentHeight, targetFlattenHeight, effectiveStrength * 0.5); 
                 }
 
-                // Only update if the height actually changed significantly
+                newHeight = Math.max(-50, Math.min(newHeight, 100)); 
+
                 if (Math.abs(newHeight - currentHeight) > 0.001) {
                      positions.setY(i, newHeight);
-                     // Accumulate change in TerrainDatabase for saving later
                      if (terrainDB) {
-                         terrainDB.accumulateHeightChange(i, newHeight); // Track for saving entire state later
+                         terrainDB.accumulateHeightChange(i, newHeight); 
                      }
-                     heightChanged = true; // Mark that height was modified in this applyBrush call
-                     vertexModified = true;
+                     heightChangedInCall = true; 
                 }
             }
         }
 
-        // If height vertices were modified in this call, update geometry and set stroke flag
-        if (heightChanged) {
+        if (heightChangedInCall) {
             positions.needsUpdate = true;
-            geometry.computeVertexNormals(); // Normals need update when height changes
-            terrainHeightModifiedInStroke = true; // Mark that height was changed in this stroke
+            geometry.computeVertexNormals(); 
+            terrainHeightModifiedInStroke = true; 
+            geometryAttributeChanged = true;
         }
     }
 }
 
+function updateBrushIndicatorVisibility() {
+    brushIndicator.visible = currentTool !== 'select';
+}
 
-function updateBrushIndicator() {
+function updateBrushIndicatorPositionAndStyle(isOverUI) {
+    if (currentTool === 'select' || isOverUI) {
+        brushIndicator.visible = false;
+        return;
+    }
+
     raycaster.setFromCamera(mouse, camera);
     const intersects = raycaster.intersectObject(terrain);
 
-    // Hide brush if pointer is over UI (checked in pointermove) or if select tool active
-     if (intersects.length > 0 && currentTool !== 'select' && brushIndicator.visible) {
+    if (intersects.length > 0) {
         const intersection = intersects[0];
         brushIndicator.position.copy(intersection.point);
-        // Make indicator size relative to brush setting
-        const scale = parseFloat(brushSizeSlider.value) * 0.25; // Adjust scaling factor as needed
+        const scale = parseFloat(brushSizeSlider.value) * 0.25; 
         brushIndicator.scale.set(scale, scale, scale);
-        // brushIndicator.visible = true; // Visibility handled in pointermove and here
+        brushIndicator.visible = true; 
 
-        // Update color/style based on tool
         if (currentTool === 'color' && colorManager) {
             brushIndicator.material.color.set(colorManager.currentColor);
             brushIndicator.material.wireframe = false;
             brushIndicator.material.opacity = 0.6;
         } else {
-            // Default indicator for height tools
             brushIndicator.material.color.set(0xffffff);
             brushIndicator.material.wireframe = true;
             brushIndicator.material.opacity = 0.5;
@@ -331,16 +315,12 @@ function onWindowResize() {
     renderer.setSize(window.innerWidth, window.innerHeight);
 }
 
-// Listen for color changes from ColorManager UI
 document.addEventListener('colorChanged', (event) => {
-    // const { color, name } = event.detail; // Data available if needed
-    // Switch to color tool automatically when a color is picked
     currentTool = 'color';
-    updateActiveButton(); // Update UI to show color tool active
-    // Brush indicator color is updated in updateBrushIndicator based on currentTool
+    updateActiveButton(); 
+    updateBrushIndicatorPositionAndStyle(false); 
 });
 
-// Initialize Database, Color, Players
 async function initializeMultiplayer() {
     try {
         console.log("Initializing multiplayer...");
@@ -348,48 +328,59 @@ async function initializeMultiplayer() {
         myUsername = room.peers[room.clientId].username;
         console.log(`Connected as: ${myUsername}`);
 
-        // Initialize Color Manager first - it might need to create the color attribute
+        console.log("Initializing Color Manager...");
         colorManager = new ColorManager(room, geometry, scene);
-        colorManager.initializeColorPalette(); // Setup UI swatches
-        await colorManager.loadColorData(); // Load canonical state, apply to geometry
+        colorManager.initializeColorPalette(); 
+        await colorManager.loadColorData(); 
+        console.log("Color Manager initialized.");
 
-        // Initialize Terrain Database - depends on geometry possibly modified by color init
+        console.log("Initializing Terrain Database...");
         terrainDB = new TerrainDatabase(room, geometry, scene);
-        await terrainDB.loadTerrainData(); // Load canonical state, apply to geometry
+        await terrainDB.loadTerrainData(); 
+        console.log("Terrain Database initialized.");
 
-        // Initialize Player Manager
+        console.log("Initializing Player Manager...");
         playerManager = new PlayerManager(room, scene);
-        playerManager.initialize(); // Also sets up presence subscription internally
+        playerManager.initialize(); 
+        console.log("Player Manager initialized.");
 
-        // Start periodic player position updates
         setInterval(() => {
             if (playerManager) {
                 playerManager.updatePlayerPosition(camera, controls);
             }
-        }, 200); // Send updates 5 times/sec
+        }, 200); 
 
-        console.log("Multiplayer initialization complete.");
-        // Final geometry update after all loading
-        geometry.attributes.position.needsUpdate = true;
-        if (geometry.attributes.color) {
-            geometry.attributes.color.needsUpdate = true;
+        console.log("Multiplayer initialization complete. Performing final geometry updates.");
+
+        if (geometry.attributes.position) {
+             geometry.attributes.position.needsUpdate = true;
+             console.log("Position attribute marked needsUpdate.");
         }
+        if (geometry.attributes.color) {
+             geometry.attributes.color.needsUpdate = true;
+             console.log("Color attribute marked needsUpdate.");
+        }
+        console.log("Computing final vertex normals...");
         geometry.computeVertexNormals();
+        console.log("Vertex normals computed.");
 
-
+        console.log("Final geometry setup complete.");
     } catch (error) {
         console.error('Error initializing multiplayer:', error);
-        // Maybe display an error message to the user
+        const status = document.getElementById('save-status');
+        if (status) {
+            status.textContent = "Error initializing terrain!";
+            status.style.opacity = '1';
+            status.style.backgroundColor = 'rgba(220,53,69,0.7)';
+        }
     }
 }
 
-// --- Animation Loop ---
 function animate() {
     requestAnimationFrame(animate);
 
-    controls.update(); // Required for damping
+    controls.update(); 
 
-    // Render player markers if player manager is initialized
     if (playerManager) {
         playerManager.renderPlayerPositions();
     }
@@ -397,13 +388,11 @@ function animate() {
     renderer.render(scene, camera);
 }
 
-// --- Initial Setup Calls ---
 updateSliderValue(brushSizeSlider, brushSizeValueSpan);
 updateSliderValue(brushStrengthSlider, brushStrengthValueSpan);
 updateSliderValue(flattenHeightSlider, flattenHeightValueSpan);
 
-// Paint button is now static HTML, ensure listener is attached correctly above.
-updateActiveButton(); // Set initial active button state and UI visibility
+updateActiveButton(); 
 
-initializeMultiplayer(); // Initialize multiplayer and load data
-animate(); // Start the animation loop
+initializeMultiplayer(); 
+animate(); 

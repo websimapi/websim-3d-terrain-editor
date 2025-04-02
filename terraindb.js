@@ -18,14 +18,18 @@ export class TerrainDatabase {
         // Flag to prevent saving while loading initial data
         this.isLoading = true;
         this.unsubscribeHeight = null; // To store unsubscribe function
+        // Flag to track if the initial load created the state record
+        this.initialLoadCreatedState = false;
     }
 
     async loadTerrainData() {
         this.isLoading = true;
+        this.initialLoadCreatedState = false; // Reset flag
         if (this.unsubscribeHeight) this.unsubscribeHeight(); // Unsubscribe from previous listener if any
+        const positions = this.geometry.attributes.position; // Get positions reference once
+
         try {
             console.log("Loading canonical terrain height state...");
-            const positions = this.geometry.attributes.position;
 
             // Fetch the list of state records (should ideally be just one canonical record)
             const states = await this.room.collection('terrainHeightState').getList();
@@ -36,70 +40,58 @@ export class TerrainDatabase {
                 // Sort by creation date just in case, take the newest
                 latestState = states.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
                 this.canonicalHeightRecordId = latestState.id; // Store the ID
-                console.log(`Found latest height state record: ID=${this.canonicalHeightRecordId}, Timestamp=${latestState.timestamp}`);
-                this.applyHeightState(latestState); // Apply the initial state
+                console.log(`Applying initial height state: ID=${this.canonicalHeightRecordId}, Timestamp=${latestState.timestamp}`);
+                this.applyHeightState(latestState); // Apply the initial state - THIS NOW SETS needsUpdate
             } else {
                 console.log("No canonical terrain height state found. Creating initial flat terrain state record.");
                 // If no state exists, initialize geometry to flat and create the first record
                 await this.createFlatTerrainStateRecord(); // This sets geometry and saves the first state
+                positions.needsUpdate = true; // Ensure update after manual flattening in createFlat
+                this.initialLoadCreatedState = true; // Mark that we created the initial state
             }
 
             // Subscribe to future updates
             console.log(`Subscribing to terrainHeightState collection...`);
             this.unsubscribeHeight = this.room.collection('terrainHeightState').subscribe((incomingStates) => {
-                 console.log(`Height subscription triggered. Received ${incomingStates.length} states.`);
+                console.log(`Height subscription triggered. Received ${incomingStates.length} states.`);
                 if (this.isLoading) {
                     console.log("Skipping height subscription update during initial load.");
                     return;
                 }
                 if (incomingStates.length > 0) {
                     const updatedState = incomingStates.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
-                     console.log(`Processing height update: ID=${updatedState.id}, CanonicalID=${this.canonicalHeightRecordId}, Timestamp=${updatedState.timestamp}, LastAppliedTS=${this.lastAppliedTimestamp}`);
+                    console.log(`Processing height update: ID=${updatedState.id}, CanonicalID=${this.canonicalHeightRecordId}, Timestamp=${updatedState.timestamp}, LastAppliedTS=${this.lastAppliedTimestamp}`);
 
-                    // Apply if it's the canonical record (regardless of timestamp now)
-                    // This ensures external updates are always applied.
-                    // The local lastAppliedTimestamp is still updated after applying,
-                    // and also immediately after a user saves their *own* changes,
-                    // which helps prevent immediate re-application of one's own saves.
+                    // Apply if it's the canonical record AND the timestamp is different OR if the canonical ID changed
+                    let shouldApply = false;
                     if (updatedState.id === this.canonicalHeightRecordId) {
-                         // Check timestamp *only* for logging purposes, not for skipping application
-                         if (updatedState.timestamp === this.lastAppliedTimestamp) {
-                             console.log(`Applying height state via subscription (ID: ${updatedState.id}, TS: ${updatedState.timestamp}) - Timestamp matches last applied, but applying anyway.`);
-                         } else {
-                             console.log(`Applying updated height state via subscription (ID: ${updatedState.id}, TS: ${updatedState.timestamp})`);
-                         }
-
-                        if (this.applyHeightState(updatedState)) { // Apply the full state
-                            // Ensure geometry reflects the update
-                            this.geometry.attributes.position.needsUpdate = true;
-                            this.geometry.computeVertexNormals();
-                             console.log("Geometry updated from height subscription.");
+                        if (updatedState.timestamp !== this.lastAppliedTimestamp) {
+                            console.log(`Applying updated height state via subscription (ID: ${updatedState.id}, TS: ${updatedState.timestamp})`);
+                            shouldApply = true;
                         } else {
-                             console.log("applyHeightState indicated no change was needed (e.g., identical data).");
+                            console.log(`Skipping height update: Same timestamp for canonical ID (${updatedState.timestamp}).`);
                         }
-                    } else if (updatedState.id !== this.canonicalHeightRecordId && incomingStates.some(s => s.id === this.canonicalHeightRecordId)) {
-                         // If the canonical ID is present but not the latest, log a warning but don't switch.
-                         // This could happen in rare race conditions or if old records weren't cleaned up.
-                         console.warn(`Received update where latest state ID (${updatedState.id}) does not match canonical ID (${this.canonicalHeightRecordId}), but canonical record exists in update list. Sticking with canonical record.`);
-                         // Optional: Could try to find and apply the canonical record from the incomingStates list here if needed.
-                    }
-                    else if (updatedState.id !== this.canonicalHeightRecordId && !incomingStates.some(s => s.id === this.canonicalHeightRecordId)) {
-                        // If the canonical ID we know is *gone* and a new latest exists, switch to it.
-                         console.warn(`Canonical height record ID ${this.canonicalHeightRecordId} not found in latest updates. Switching canonical ID to ${updatedState.id}. Applying new state.`);
-                         this.canonicalHeightRecordId = updatedState.id;
-                         if (this.applyHeightState(updatedState)) {
-                            this.geometry.attributes.position.needsUpdate = true;
-                            this.geometry.computeVertexNormals();
-                             console.log("Geometry updated from new canonical height ID.");
-                         }
+                    } else if (incomingStates.some(s => s.id === this.canonicalHeightRecordId)) {
+                        console.warn(`Received update where latest state ID (${updatedState.id}) does not match canonical ID (${this.canonicalHeightRecordId}), but canonical record exists in update list. Sticking with canonical record. No update applied.`);
+                        // Potentially find and apply the canonical one if its timestamp is new? For now, do nothing.
                     } else {
-                         // This case should ideally not be reached with the above logic.
-                         console.log("Skipping height update: Condition not met (should not happen?).");
+                        // If the canonical ID we know is *gone* and a new latest exists, switch to it.
+                        console.warn(`Canonical height record ID ${this.canonicalHeightRecordId} not found in latest updates. Switching canonical ID to ${updatedState.id}. Applying new state.`);
+                        this.canonicalHeightRecordId = updatedState.id;
+                        shouldApply = true; // Apply the new canonical state regardless of timestamp comparison with old record
                     }
+
+                    if (shouldApply) {
+                        if (this.applyHeightState(updatedState)) { // Apply the full state
+                            // applyHeightState now handles needsUpdate=true internally
+                            this.geometry.computeVertexNormals(); // Recompute normals after applying update
+                            console.log("Geometry updated from height subscription.");
+                        }
+                    }
+
                 } else {
                     console.warn("Canonical height state subscription returned empty list. This might indicate the record was deleted.");
-                    // Consider re-creating the flat state if desired:
-                    // await this.createFlatTerrainStateRecord();
+                    // Resetting could cause data loss if it's temporary. Consider adding a delay or manual reset button.
                 }
             });
 
@@ -110,13 +102,17 @@ export class TerrainDatabase {
             // Fallback: ensure terrain is at least flat locally
             console.log("Applying default flat state due to loading error.");
             this.applyHeightState({ heightData: {}, timestamp: null }); // Apply empty data to reset
+            positions.needsUpdate = true; // Ensure update after reset
         } finally {
             this.isLoading = false; // Mark loading as complete *after* setup
             console.log("isLoading set to false for terrain height.");
-            // Ensure geometry is updated visually after initial load attempt
-            this.geometry.attributes.position.needsUpdate = true;
+            // Ensure geometry vertex normals are computed after initial load/creation attempt
+            // This is crucial for correct lighting after height changes.
+            console.log("Computing vertex normals after initial terrain height load/create.");
             this.geometry.computeVertexNormals();
-             console.log("Final geometry update after terrain height load.");
+            // Ensure the geometry is visually updated in the renderer in the next frame
+            positions.needsUpdate = true; // Set again for safety, ensures update regardless of path
+            console.log("Final position attribute marked needsUpdate after terrain height load.");
         }
     }
 
@@ -127,21 +123,12 @@ export class TerrainDatabase {
             console.warn('Invalid height state data received:', stateData);
             stateData = { heightData: {}, timestamp: null }; // Use default empty data for reset
         }
-         // Avoid re-applying the same state *if the timestamp matches*.
-         // This prevents redundant applications triggered by the subscription immediately
-         // after our own save action, BUT allows external updates even if timestamp somehow matches.
-         // The main subscription logic change already ensures external updates get through.
-         // This check inside applyHeightState is a secondary guard against unnecessary processing.
-        if (stateData.timestamp && stateData.timestamp === this.lastAppliedTimestamp) {
-            // Check if the actual data has changed - this can happen if applyHeightState is called
-            // directly after a local modification but before a save/subscription cycle.
-            // A simple check: compare number of keys or a sample of values.
-            // For simplicity, we'll still rely on the subscription logic handling most cases
-            // and just log that we *would* skip based on timestamp if called directly.
-            // The subscription logic now forces application anyway, overriding this check.
-            // console.log(`Skipping application of height state: Timestamp ${stateData.timestamp} already applied.`);
-            // return false; // Indicate no change was made based *only* on timestamp
-            // --- Removed the actual return false based on timestamp alone ---
+
+        // Skip if timestamp matches *unless* it's the state we just created on initial load
+        // This prevents the subscription immediately applying the state we *just* created unnecessarily
+        if (stateData.timestamp && stateData.timestamp === this.lastAppliedTimestamp && !(this.initialLoadCreatedState && this.isLoading)) {
+            console.log(`Skipping application of height state: Timestamp ${stateData.timestamp} already applied.`);
+            return false; // Indicate no change needed based on timestamp
         }
 
         console.log(`Applying canonical height state (TS: ${stateData.timestamp})...`);
@@ -149,48 +136,44 @@ export class TerrainDatabase {
         const loadedHeightData = stateData.heightData || {};
         const numLoadedKeys = Object.keys(loadedHeightData).length;
         console.log(`State contains ${numLoadedKeys} height entries.`);
-        let verticesApplied = 0;
-        let verticesDefaulted = 0;
-        let changeOccurred = false; // Track if any vertex *actually* changed height
+        let changeOccurredInCall = false; // Track if any vertex *buffer value* actually changed in this call
 
-        // Clear current local state before applying the new one
-        // No, don't clear - we need to compare with the existing state to see if changes occurred
-        // this.terrainHeightData = {}; // <-- Removed this line
+        // Clear local cache before applying the new state data
+        this.terrainHeightData = {};
 
         // Apply heights from state, default to 0 if index missing
         for (let i = 0; i < positions.count; i++) {
             const loadedHeight = loadedHeightData[i];
-            const targetHeight = (loadedHeight !== undefined && loadedHeight !== null) ? Number(loadedHeight) : 0; // Default to 0 height
-            const currentHeight = positions.getY(i); // Get current height from geometry buffer
+            // Default to 0 height if undefined or null in the loaded data
+            const targetHeight = (loadedHeight !== undefined && loadedHeight !== null) ? Number(loadedHeight) : 0;
+            const currentGeometryHeight = positions.getY(i); // Get current height JUST for comparison/logging
 
-            // Only set if different from current geometry
-            // Use a small tolerance for floating point comparison
-            if (Math.abs(currentHeight - targetHeight) > 0.0001) {
-                positions.setY(i, targetHeight);
-                changeOccurred = true; // Mark that a change happened
-                 // Update local cache ONLY if geometry was changed
-                 this.terrainHeightData[i] = targetHeight;
-            } else {
-                // Ensure local cache is consistent even if no change needed
-                // This handles cases where cache might be out of sync but geometry is correct
-                if (this.terrainHeightData[i] !== targetHeight) {
-                     this.terrainHeightData[i] = targetHeight;
-                     // Don't set changeOccurred = true here, as geometry didn't update
-                }
+            // *** ALWAYS set the geometry buffer from the loaded state data ***
+            // This ensures the buffer matches the canonical state, regardless of previous buffer state.
+            positions.setY(i, targetHeight);
+
+            // Check if this application actually changed the geometry buffer value compared to before *this specific call*.
+            if (Math.abs(currentGeometryHeight - targetHeight) > 0.0001) {
+                changeOccurredInCall = true; // Mark that the geometry buffer value was altered by this call
             }
 
+            // Update local cache to match the applied state
+            this.terrainHeightData[i] = targetHeight;
 
-            if (loadedHeight !== undefined && loadedHeight !== null) {
-                verticesApplied++;
-            } else {
-                verticesDefaulted++;
-            }
+            // Optional: Add verbose logging during initial load if needed for debugging
+            // if (this.isLoading) {
+            //    console.log(` Load ApplyHeight[${i}]: Loaded=${loadedHeight}, Target=${targetHeight}, PrevGeom=${currentGeometryHeight}, Changed=${Math.abs(currentGeometryHeight - targetHeight) > 0.0001}`);
+            // }
         }
 
-        console.log(`Applied height state: ${verticesApplied} vertices from data, ${verticesDefaulted} defaulted to 0. Actual vertex height changes: ${changeOccurred}`);
+        // *** ALWAYS mark the position attribute as needing update after applying a full state ***
+        positions.needsUpdate = true;
+
+        console.log(`Applied height state (TS: ${stateData.timestamp}). Geometry buffer updated directly. Buffer value changes detected: ${changeOccurredInCall}`);
         this.lastAppliedTimestamp = stateData.timestamp; // Track the timestamp of applied data
-        // Caller handles geometry updates (needsUpdate, computeVertexNormals) IF changeOccurred is true
-        return changeOccurred; // Indicate if state application resulted in geometry change
+
+        // Return true indicating the buffer was potentially modified and needsUpdate was set.
+        return true;
     }
 
     // Called during mouse drag to stage changes for the current stroke
@@ -210,22 +193,20 @@ export class TerrainDatabase {
         // Merge changes from the current stroke into the main state BEFORE checking if empty
         let changesFromStroke = Object.keys(this.currentStrokeHeightChanges).length > 0;
         if (changesFromStroke) {
-             console.log(`Merging ${Object.keys(this.currentStrokeHeightChanges).length} height changes from stroke into canonical state.`);
+            console.log(`Merging ${Object.keys(this.currentStrokeHeightChanges).length} height changes from stroke into canonical state.`);
             // Update the canonical data cache with the stroke changes
-             Object.assign(this.terrainHeightData, this.currentStrokeHeightChanges);
-             // Clear stroke changes *after* merging
-             this.currentStrokeHeightChanges = {};
+            Object.assign(this.terrainHeightData, this.currentStrokeHeightChanges);
+            // Clear stroke changes *after* merging
+            this.currentStrokeHeightChanges = {};
         } else {
-            console.log("No height changes accumulated in the current stroke.");
+            console.log("No height changes accumulated in the current stroke. No save needed.");
             // If there were no changes in the stroke, we don't need to save.
             return;
         }
 
-
         // Double check if terrainHeightData is actually populated (should be after load or create)
         if (Object.keys(this.terrainHeightData).length === 0) {
             console.warn("Attempted to save but terrainHeightData is empty. Aborting save.");
-             this.currentStrokeHeightChanges = {}; // Still clear stroke changes maybe? Or revert? For now, clear.
             return;
         }
 
@@ -263,11 +244,7 @@ export class TerrainDatabase {
             this.showSaveStatus(false, 'Error saving height!', true);
             // Consider how to handle errors - maybe revert local changes?
             // For now, clear stroke changes to avoid resaving the same failed data.
-            this.currentStrokeHeightChanges = {};
-        } finally {
-             // Ensure stroke changes are cleared AFTER the attempt (success or fail)
-             // This was already done after merge or if no changes, keep it this way.
-             // this.currentStrokeHeightChanges = {}; // Redundant remove
+            this.currentStrokeHeightChanges = {}; // Ensure cleared on error too
         }
     }
 
@@ -281,7 +258,7 @@ export class TerrainDatabase {
 
             for (let i = 0; i < positions.count; i++) {
                 heightData[i] = 0;
-                positions.setY(i, 0); // Set geometry flat
+                positions.setY(i, 0); // *** Set geometry flat directly ***
                 this.terrainHeightData[i] = 0; // Update local cache
             }
 
