@@ -64,7 +64,7 @@ controls.minDistance = 10;
 controls.maxDistance = 150; // Reduced max distance for better control
 controls.maxPolarAngle = Math.PI / 2.1; // Prevent camera going below horizon
 controls.target.set(0, 0, 0);
-controls.zoomSpeed = 0.5; // Reduced zoom speed for smoother zooming
+controls.zoomSpeed = 0.2; // Further Reduced zoom speed for smoother scrolling
 controls.rotateSpeed = 0.7; // More controlled rotation speed
 controls.panSpeed = 0.8; // Adjusted pan speed
 
