@@ -150,7 +150,7 @@ export class ColorManager {
             // Get all users' color data
             const userColorRows = await this.room.collection('userColorData').getList();
             
-            // Find this user's row or create if it doesn't exist
+            // Find this user's row using username instead of ID
             let userRow = userColorRows.find(row => row.username === this.myUsername);
             
             if (userRow) {
@@ -202,21 +202,23 @@ export class ColorManager {
             
             // Save color data to user's row
             if (this.userColorRowId) {
-                // Get the current user row
-                let userRow = await this.room.collection('userColorData').filter({id: this.userColorRowId}).getList();
+                // Get the current user row by username instead of ID
+                let userRows = await this.room.collection('userColorData').filter({username: this.myUsername}).getList();
+                let userRow = userRows.length > 0 ? userRows[0] : null;
                 
-                if (userRow && userRow.length > 0) {
+                if (userRow) {
                     // Update existing row with merged color changes
-                    const existingColors = userRow[0].colorData || {};
+                    const existingColors = userRow.colorData || {};
                     const mergedColors = {...existingColors, ...this.colorChanges};
                     
-                    await this.room.collection('userColorData').update(this.userColorRowId, {
+                    await this.room.collection('userColorData').update(userRow.id, {
                         colorData: mergedColors,
                         changeCount: Object.keys(mergedColors).length,
                         lastModified: new Date().toISOString()
                     });
+                    this.userColorRowId = userRow.id;
                 } else {
-                    console.warn("User color row not found, creating a new one");
+                    console.warn("User color row not found by username, creating a new one");
                     const newRow = await this.room.collection('userColorData').create({
                         colorData: this.colorChanges,
                         changeCount: Object.keys(this.colorChanges).length,

@@ -47,7 +47,7 @@ export class TerrainDatabase {
             // Get all users' terrain changes
             const userTerrainRows = await this.room.collection('userTerrain').getList();
             
-            // Find this user's row or create if it doesn't exist
+            // Find this user's row using username instead of ID
             let userRow = userTerrainRows.find(row => row.username === this.myUsername);
             
             if (userRow) {
@@ -198,23 +198,25 @@ export class TerrainDatabase {
                 const strokeStartTime = this.strokeStartTime || new Date().toISOString();
                 
                 if (this.userRowId) {
-                    // Get the current user row
-                    let userRow = await this.room.collection('userTerrain').filter({id: this.userRowId}).getList();
+                    // Get the current user row by username instead of ID
+                    let userRows = await this.room.collection('userTerrain').filter({username: this.myUsername}).getList();
+                    let userRow = userRows.length > 0 ? userRows[0] : null;
                     
-                    if (userRow && userRow.length > 0) {
+                    if (userRow) {
                         // Update existing row with merged changes
-                        const existingChanges = userRow[0].changes || {};
+                        const existingChanges = userRow.changes || {};
                         const mergedChanges = {...existingChanges, ...changedVertices};
                         
-                        await this.room.collection('userTerrain').update(this.userRowId, {
+                        await this.room.collection('userTerrain').update(userRow.id, {
                             changes: mergedChanges,
                             changeCount: Object.keys(mergedChanges).length,
                             lastModified: new Date().toISOString(),
                             strokeStartTime: strokeStartTime,
                             strokeEndTime: strokeEndTime
                         });
+                        this.userRowId = userRow.id;
                     } else {
-                        console.warn("User row not found, creating a new one");
+                        console.warn("User row not found by username, creating a new one");
                         const newRow = await this.room.collection('userTerrain').create({
                             changes: changedVertices,
                             changeCount: changeCount,
