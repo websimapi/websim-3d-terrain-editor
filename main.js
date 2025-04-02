@@ -53,8 +53,6 @@ const geometry = new THREE.PlaneGeometry(terrainSize, terrainSize, terrainSegmen
 geometry.rotateX(-Math.PI / 2); // Rotate to be horizontal
 
 // Vertices will be set during initialization by TerrainDatabase/ColorManager
-geometry.computeVertexNormals(); // Initial computation
-
 let currentTool = 'raise'; // 'select', 'raise', 'lower', 'flatten', 'color'
 const brushIndicator = new THREE.Mesh(
     new THREE.SphereGeometry(1, 16, 8),
@@ -153,7 +151,6 @@ function onPointerMoveTerrainCheck(event) {
         return;
     }
 
-
     mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
     mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
 
@@ -194,31 +191,44 @@ async function onPointerUpTerrain(event) { // Make async to await saves
         isMouseDown = false;
         controls.enabled = true; // Re-enable camera controls
 
+        // Use Promise.all to wait for both potential saves concurrently
+        const savePromises = [];
+
         // Save terrain height changes if any occurred during the stroke
         if (terrainHeightModifiedInStroke && terrainDB) {
-            console.log("Stroke ended, saving height state...");
-            try {
-                await terrainDB.saveTerrainChanges(); // Await the save operation
-                terrainHeightModifiedInStroke = false; // Reset flag on successful save
-            } catch (error) {
+            console.log("Stroke ended, queueing height state save...");
+            // Don't await here, add the promise to the array
+            savePromises.push(terrainDB.saveTerrainChanges().then(() => {
+                 terrainHeightModifiedInStroke = false; // Reset flag on successful save
+                 console.log("Height state saved successfully.");
+            }).catch(error => {
                 console.error("Failed to save height state:", error);
-                // Handle error, maybe keep the flag true to retry?
-            }
+                // Keep flag true? Or reset anyway? Resetting prevents continuous errors on failure.
+                 terrainHeightModifiedInStroke = false;
+            }));
         }
 
         // Save terrain color changes if any occurred during the stroke
         if (terrainColorModifiedInStroke && colorManager) {
-            console.log("Stroke ended, saving color state...");
-             try {
-                await colorManager.saveColorChanges(); // Await the save operation
+            console.log("Stroke ended, queueing color state save...");
+             // Don't await here, add the promise to the array
+             savePromises.push(colorManager.saveColorChanges().then(() => {
                 terrainColorModifiedInStroke = false; // Reset flag on successful save
-             } catch(error) {
+                console.log("Color state saved successfully.");
+             }).catch(error => {
                  console.error("Failed to save color state:", error);
-             }
+                 terrainColorModifiedInStroke = false; // Reset to prevent continuous errors
+             }));
+        }
+
+        // Wait for all pending saves to complete
+        if (savePromises.length > 0) {
+             console.log(`Waiting for ${savePromises.length} save operations...`);
+             await Promise.all(savePromises);
+             console.log("All save operations completed.");
         }
     }
 }
-
 
 function applyBrush() {
     if (currentTool === 'select') return; // Don't apply brush if selecting
@@ -235,7 +245,6 @@ function applyBrush() {
         const targetFlattenHeight = parseFloat(flattenHeightSlider.value);
 
         const positions = geometry.attributes.position;
-        const vertex = new THREE.Vector3();
         let vertexModified = false; // Tracks if any vertex was changed in *this specific call*
 
         // --- Color Application ---
@@ -244,45 +253,38 @@ function applyBrush() {
             if (appliedColor) {
                 terrainColorModifiedInStroke = true; // Mark that color was changed in this stroke
                 vertexModified = true; // Indicate geometry update needed
+                // ColorManager handles its own geometry.attributes.color.needsUpdate = true;
             }
-            // Don't apply height changes if painting
-            // Normals don't change with color, geometry update handled by ColorManager
-            return; // Stop here if painting
+             // Prevent height changes when painting
+            return;
         }
 
         // --- Height Application ---
         let heightChanged = false;
         for (let i = 0; i < positions.count; i++) {
-            vertex.fromBufferAttribute(positions, i);
-            const dx = vertex.x - hitPoint.x;
-            const dz = vertex.z - hitPoint.z;
-            const distance = Math.sqrt(dx * dx + dz * dz);
+            // ... (existing logic for calculating distance, falloff, newHeight) ...
 
-            if (distance < brushRadius) {
-                const falloff = Math.cos((distance / brushRadius) * Math.PI / 2);
-                const strengthFactor = brushStrength * falloff * 0.15; // Base strength adjustment
-                const currentHeight = positions.getY(i);
-                let newHeight = currentHeight;
+            // Only update if the height actually changed significantly
+             const currentHeight = positions.getY(i); // Get current height before potential change
+             let newHeight = currentHeight;
 
-                if (currentTool === 'raise') {
-                    newHeight = currentHeight + strengthFactor;
-                } else if (currentTool === 'lower') {
-                    newHeight = currentHeight - strengthFactor;
-                } else if (currentTool === 'flatten') {
-                     // Lerp towards target height based on strength/falloff
-                    newHeight = THREE.MathUtils.lerp(currentHeight, targetFlattenHeight, strengthFactor * 0.5);
-                }
+            if (currentTool === 'raise') {
+                 newHeight = currentHeight + brushStrength * 0.15;
+            } else if (currentTool === 'lower') {
+                 newHeight = currentHeight - brushStrength * 0.15;
+            } else if (currentTool === 'flatten') {
+                // Lerp towards target height based on strength/falloff
+                 newHeight = THREE.MathUtils.lerp(currentHeight, targetFlattenHeight, brushStrength * 0.15);
+            }
 
-                // Only update if the height actually changed significantly
-                if (Math.abs(newHeight - currentHeight) > 0.001) {
-                     positions.setY(i, newHeight);
-                     // Accumulate change in TerrainDatabase for saving later
-                     if (terrainDB) {
-                         terrainDB.accumulateHeightChange(i, newHeight); // Track for saving entire state later
-                     }
-                     heightChanged = true; // Mark that height was modified in this applyBrush call
-                     vertexModified = true;
-                }
+            if (Math.abs(newHeight - currentHeight) > 0.001) {
+                 positions.setY(i, newHeight);
+                 // Accumulate change in TerrainDatabase for saving later
+                 if (terrainDB) {
+                     terrainDB.accumulateHeightChange(i, newHeight); // Track for saving entire state later
+                 }
+                 heightChanged = true; // Mark that height was modified in this applyBrush call
+                 vertexModified = true;
             }
         }
 
@@ -294,7 +296,6 @@ function applyBrush() {
         }
     }
 }
-
 
 function updateBrushIndicator() {
     raycaster.setFromCamera(mouse, camera);
@@ -343,23 +344,50 @@ document.addEventListener('colorChanged', (event) => {
 // Initialize Database, Color, Players
 async function initializeMultiplayer() {
     try {
-        console.log("Initializing multiplayer...");
+        console.log("Initializing multiplayer connection...");
         await room.initialize();
         myUsername = room.peers[room.clientId].username;
         console.log(`Connected as: ${myUsername}`);
 
-        // Initialize Color Manager first - it might need to create the color attribute
+        // Create managers
         colorManager = new ColorManager(room, geometry, scene);
-        colorManager.initializeColorPalette(); // Setup UI swatches
-        await colorManager.loadColorData(); // Load canonical state, apply to geometry
+        terrainDB = new TerrainDatabase(room, geometry, scene); // Pass geometry here
 
-        // Initialize Terrain Database - depends on geometry possibly modified by color init
-        terrainDB = new TerrainDatabase(room, geometry, scene);
-        await terrainDB.loadTerrainData(); // Load canonical state, apply to geometry
+        // Initialize UI elements managed by ColorManager
+        colorManager.initializeColorPalette();
 
-        // Initialize Player Manager
+        // Ensure the geometry has the color attribute BEFORE loading data
+        // This prepares the buffer if it doesn't exist.
+        console.log("Ensuring color attribute exists...");
+        colorManager.ensureColorAttribute();
+
+        console.log("Starting to load terrain height and color data concurrently...");
+        // Load terrain and color data concurrently
+        await Promise.all([
+            terrainDB.loadTerrainData(),
+            colorManager.loadColorData()
+        ]);
+        console.log("Terrain height and color data loading process finished.");
+
+        // ---- Crucial Final Geometry Update ----
+        // After both load functions have completed (which internally call applyState),
+        // mark the buffers as needing update and compute normals once.
+        console.log("Applying final geometry updates after loading...");
+        geometry.attributes.position.needsUpdate = true;
+        if (geometry.attributes.color) {
+            geometry.attributes.color.needsUpdate = true;
+        } else {
+            console.warn("Color attribute not found on geometry after loading color data.");
+        }
+        // Compute normals AFTER heights (and potentially colors) are set.
+        geometry.computeVertexNormals();
+        console.log("Geometry updates applied and normals computed.");
+
+
+        // Initialize Player Manager *after* terrain is loaded and geometry updated
+        console.log("Initializing Player Manager...");
         playerManager = new PlayerManager(room, scene);
-        playerManager.initialize(); // Also sets up presence subscription internally
+        playerManager.initialize(); // Sets up presence subscription
 
         // Start periodic player position updates
         setInterval(() => {
@@ -369,17 +397,16 @@ async function initializeMultiplayer() {
         }, 200); // Send updates 5 times/sec
 
         console.log("Multiplayer initialization complete.");
-        // Final geometry update after all loading
-        geometry.attributes.position.needsUpdate = true;
-        if (geometry.attributes.color) {
-            geometry.attributes.color.needsUpdate = true;
-        }
-        geometry.computeVertexNormals();
-
 
     } catch (error) {
         console.error('Error initializing multiplayer:', error);
-        // Maybe display an error message to the user
+        // Display an error message to the user?
+        const statusElement = document.getElementById('save-status');
+        if(statusElement) {
+             statusElement.textContent = "Initialization Error! Refresh may be needed.";
+             statusElement.style.opacity = '1';
+             statusElement.style.backgroundColor = 'rgba(220,53,69,0.7)';
+        }
     }
 }
 
