@@ -1,17 +1,16 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TerrainDatabase } from './terraindb.js';
+import { PlayerManager } from './players.js';
 
 // Room setup for multiplayer
 const room = new WebsimSocket();
 let terrainModified = false;
-let saveTimeout = null;
-let lastSaveTime = 0;
-const SAVE_THROTTLE = 2000; // Throttle saves to once every 2 seconds
 let myUsername = '';
 
 // Will be initialized later
 let terrainDB;
+let playerManager;
 
 // --- Scene Setup ---
 const scene = new THREE.Scene();
@@ -338,109 +337,15 @@ async function initializeMultiplayer() {
     terrainDB = new TerrainDatabase(room, geometry, scene);
     await terrainDB.initialize();
     
-    // Subscribe to presence updates (other players joining/leaving)
-    room.subscribePresence(updatePlayersList);
+    // Initialize player manager
+    playerManager = new PlayerManager(room, scene);
+    playerManager.initialize();
     
     // Update player position in real-time
-    setInterval(updatePlayerPosition, 100);
-    
-    // Display initial players list
-    updatePlayersList(room.presence);
+    setInterval(() => {
+        playerManager.updatePlayerPosition(camera, controls);
+    }, 100);
 }
-
-// Update and display the list of connected players
-function updatePlayersList(presence) {
-    const playersContainer = document.getElementById('players-container');
-    playersContainer.innerHTML = '';
-    
-    Object.keys(room.peers).forEach(clientId => {
-        const peer = room.peers[clientId];
-        const playerDiv = document.createElement('div');
-        playerDiv.className = 'player-item';
-        
-        const avatar = document.createElement('img');
-        avatar.className = 'player-avatar';
-        avatar.src = `https://images.websim.ai/avatar/${peer.username}`;
-        
-        const nameSpan = document.createElement('span');
-        nameSpan.className = 'player-name';
-        nameSpan.textContent = peer.username;
-        
-        if (peer.id === room.clientId) {
-            nameSpan.textContent += ' (You)';
-        }
-        
-        playerDiv.appendChild(avatar);
-        playerDiv.appendChild(nameSpan);
-        playersContainer.appendChild(playerDiv);
-    });
-}
-
-// Update player position in the shared presence
-function updatePlayerPosition() {
-    if (controls.target && camera.position) {
-        room.updatePresence({
-            position: {
-                x: camera.position.x,
-                y: camera.position.y,
-                z: camera.position.z
-            },
-            target: {
-                x: controls.target.x,
-                y: controls.target.y,
-                z: controls.target.z
-            }
-        });
-    }
-}
-
-function renderPlayerPositions() {
-    // Remove markers for disconnected players
-    Object.keys(playerMarkers).forEach(clientId => {
-        if (!room.presence[clientId]) {
-            scene.remove(playerMarkers[clientId]);
-            delete playerMarkers[clientId];
-        }
-    });
-    
-    // Update or create markers for connected players
-    Object.keys(room.presence).forEach(clientId => {
-        if (clientId === room.clientId) return; // Skip self
-        
-        const playerData = room.presence[clientId];
-        if (!playerData.position) return; // Skip if no position data yet
-        
-        // Create marker if it doesn't exist
-        if (!playerMarkers[clientId]) {
-            const markerGeometry = new THREE.ConeGeometry(1, 2, 8);
-            const markerMaterial = new THREE.MeshBasicMaterial({ 
-                color: 0xff0000,
-                wireframe: true
-            });
-            playerMarkers[clientId] = new THREE.Mesh(markerGeometry, markerMaterial);
-            scene.add(playerMarkers[clientId]);
-        }
-        
-        // Update marker position
-        const marker = playerMarkers[clientId];
-        marker.position.set(
-            playerData.position.x, 
-            playerData.position.y, 
-            playerData.position.z
-        );
-        
-        // Point marker toward camera target if available
-        if (playerData.target) {
-            marker.lookAt(
-                playerData.target.x,
-                playerData.target.y,
-                playerData.target.z
-            );
-        }
-    });
-}
-
-const playerMarkers = {};
 
 // --- Animation Loop ---
 function animate() {
@@ -462,10 +367,10 @@ function animate() {
 
     controls.update(); // Required for damping
     
-    // Update brush indicator visibility based on mouse interaction state potentially
-    // (e.g., hide when mouse is up and not over canvas) - current logic keeps it based on raycast hit
-
-    renderPlayerPositions();
+    // Render player markers if player manager is initialized
+    if (playerManager) {
+        playerManager.renderPlayerPositions();
+    }
     
     renderer.render(scene, camera);
 }

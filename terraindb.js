@@ -46,15 +46,18 @@ export class TerrainDatabase {
             // Get all incremental changes after the snapshot
             let changes = [];
             if (snapshotTime) {
-                changes = await this.room.collection('terrainChange').filter({
-                    created_at: { $gt: snapshotTime.toISOString() }
-                }).getList();
+                // Fixed: Use the proper filter query format
+                changes = await this.room.collection('terrainChange')
+                    .filter({ created_at: { $gt: snapshotTime.toISOString() } })
+                    .getList();
             } else {
                 changes = await this.room.collection('terrainChange').getList();
             }
                 
             if (changes.length > 0) {
                 console.log(`Applying ${changes.length} changes after snapshot`);
+                // Sort changes chronologically before applying
+                changes.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
                 this.applyIncrementalChanges(changes);
             }
             
@@ -71,6 +74,8 @@ export class TerrainDatabase {
                     change.username !== this.myUsername
                 );
                 if (otherChanges.length > 0) {
+                    // Sort by creation time before applying
+                    otherChanges.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
                     this.applyIncrementalChanges(otherChanges);
                 }
             });
@@ -90,9 +95,12 @@ export class TerrainDatabase {
         const positions = this.geometry.attributes.position;
         let applied = false;
         
+        // Convert string keys back to integers
         for (let i = 0; i < positions.count; i++) {
-            if (heightData[i] !== undefined) {
-                positions.setY(i, heightData[i]);
+            // Check both string and integer keys
+            const height = heightData[i] !== undefined ? heightData[i] : heightData[String(i)];
+            if (height !== undefined) {
+                positions.setY(i, height);
                 applied = true;
             }
         }
@@ -101,6 +109,8 @@ export class TerrainDatabase {
             positions.needsUpdate = true;
             this.geometry.computeVertexNormals();
             console.log('Applied complete height data to terrain');
+        } else {
+            console.warn('No height data was applied to the terrain');
         }
     }
     
@@ -111,12 +121,12 @@ export class TerrainDatabase {
         const positions = this.geometry.attributes.position;
         let vertexModified = false;
         
-        // Sort changes by timestamp to apply in order
-        changes.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
-        
         // Process each change
         changes.forEach(change => {
-            if (!change.changes) return;
+            if (!change.changes) {
+                console.warn('Change record has no changes property:', change);
+                return;
+            }
             
             // Apply the vertex changes to our terrain
             try {
@@ -141,6 +151,8 @@ export class TerrainDatabase {
             positions.needsUpdate = true;
             this.geometry.computeVertexNormals();
             console.log(`Applied ${changes.length} incremental changes`);
+        } else {
+            console.warn('No changes were applied to the terrain');
         }
     }
     
