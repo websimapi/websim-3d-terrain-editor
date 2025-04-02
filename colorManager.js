@@ -10,7 +10,6 @@ export class ColorManager {
         this.terrainColors = {};
         this.statusElement = document.getElementById('save-status');
         this.userColorRowId = null; // Store the user's color row ID
-        this.userId = null; // User's persistent ID
         
         // Color palette
         this.colorPalette = [
@@ -148,32 +147,32 @@ export class ColorManager {
         try {
             this.myUsername = this.room.peers[this.room.clientId].username;
             
-            // Get or create persistent user ID (same as in TerrainDatabase)
-            this.userId = localStorage.getItem('terrainEditorUserId');
-            if (!this.userId) {
-                this.userId = 'user_' + this.myUsername + '_' + Date.now();
-                localStorage.setItem('terrainEditorUserId', this.userId);
-            }
-            console.log(`ColorManager using persistent user ID: ${this.userId}`);
-            
             // Get all users' color data
             const userColorRows = await this.room.collection('userColorData').getList();
             
-            // Find this user's row using userId instead of username
-            let userRow = userColorRows.find(row => row.userId === this.userId);
+            // Debug logging of all color rows and usernames
+            console.log('Current user (colors):', this.myUsername);
+            console.log('All color rows:', userColorRows.map(row => ({
+                id: row.id,
+                username: row.username,
+                changeCount: row.colorData ? Object.keys(row.colorData).length : 0
+            })));
+            
+            // Find this user's row or create if it doesn't exist
+            let userRow = userColorRows.find(row => row.username === this.myUsername);
             
             if (userRow) {
-                console.log(`Found existing color row for user ID ${this.userId}`);
+                console.log(`Found existing color row for user ${this.myUsername} with ID ${userRow.id}`);
                 this.userColorRowId = userRow.id;
             } else {
-                console.log(`Creating new color row for user ID ${this.userId}`);
+                console.log(`No color row found for user ${this.myUsername}, creating new row`);
                 userRow = await this.room.collection('userColorData').create({
-                    userId: this.userId,
-                    username: this.myUsername,
                     colorData: {},
+                    changeCount: 0,
                     lastModified: new Date().toISOString()
                 });
                 this.userColorRowId = userRow.id;
+                console.log(`Created new color row with ID ${this.userColorRowId}`);
             }
             
             // Apply all users' color data
@@ -213,37 +212,38 @@ export class ColorManager {
             
             // Save color data to user's row
             if (this.userColorRowId) {
-                // Get the current user row by userId instead of username
-                let userRows = await this.room.collection('userColorData').filter({userId: this.userId}).getList();
-                let userRow = userRows.length > 0 ? userRows[0] : null;
+                // Get the current user row
+                let userRow = await this.room.collection('userColorData').filter({id: this.userColorRowId}).getList();
+                console.log(`Looking for color row with ID ${this.userColorRowId}`, userRow);
                 
-                if (userRow) {
+                if (userRow && userRow.length > 0) {
                     // Update existing row with merged color changes
-                    const existingColors = userRow.colorData || {};
+                    const existingColors = userRow[0].colorData || {};
                     const mergedColors = {...existingColors, ...this.colorChanges};
                     
-                    await this.room.collection('userColorData').update(userRow.id, {
+                    console.log(`Updating color row ${this.userColorRowId} for user ${this.myUsername}`);
+                    await this.room.collection('userColorData').update(this.userColorRowId, {
                         colorData: mergedColors,
                         changeCount: Object.keys(mergedColors).length,
                         lastModified: new Date().toISOString()
                     });
-                    this.userColorRowId = userRow.id;
                 } else {
-                    console.warn("User color row not found by userId, creating a new one");
+                    console.warn(`User color row with ID ${this.userColorRowId} not found, creating a new one`);
+                    // Get latest rows to check what's in the database
+                    const allRows = await this.room.collection('userColorData').getList();
+                    console.log('Current color database rows:', allRows.map(r => ({ id: r.id, username: r.username })));
+                    
                     const newRow = await this.room.collection('userColorData').create({
-                        userId: this.userId,
-                        username: this.myUsername,
                         colorData: this.colorChanges,
                         changeCount: Object.keys(this.colorChanges).length,
                         lastModified: new Date().toISOString()
                     });
                     this.userColorRowId = newRow.id;
+                    console.log(`Created new color row with ID ${this.userColorRowId}`);
                 }
             } else {
                 // Create a new row for this user
                 const newRow = await this.room.collection('userColorData').create({
-                    userId: this.userId,
-                    username: this.myUsername,
                     colorData: this.colorChanges,
                     changeCount: Object.keys(this.colorChanges).length,
                     lastModified: new Date().toISOString()

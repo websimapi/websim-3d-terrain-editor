@@ -15,20 +15,10 @@ export class TerrainDatabase {
         this.statusElement = document.getElementById('save-status');
         this.strokeStartTime = null;
         this.userRowId = null; // Store the user's row ID
-        this.userId = null; // User's persistent ID
     }
 
     async initialize() {
         this.myUsername = this.room.peers[this.room.clientId].username;
-        
-        // Generate or get persistent user ID
-        this.userId = localStorage.getItem('terrainEditorUserId');
-        if (!this.userId) {
-            this.userId = 'user_' + this.myUsername + '_' + Date.now();
-            localStorage.setItem('terrainEditorUserId', this.userId);
-        }
-        console.log(`Using persistent user ID: ${this.userId}`);
-        
         await this.loadTerrainData();
     }
 
@@ -57,26 +47,35 @@ export class TerrainDatabase {
             // Get all users' terrain changes
             const userTerrainRows = await this.room.collection('userTerrain').getList();
             
-            // Find this user's row using persistent userId instead of username
-            let userRow = userTerrainRows.find(row => row.userId === this.userId);
+            // Debug logging of all rows and usernames
+            console.log('Current user:', this.myUsername);
+            console.log('All terrain rows:', userTerrainRows.map(row => ({
+                id: row.id,
+                username: row.username,
+                changeCount: row.changeCount || 0
+            })));
+            
+            // Find this user's row or create if it doesn't exist
+            let userRow = userTerrainRows.find(row => row.username === this.myUsername);
             
             if (userRow) {
-                console.log(`Found existing terrain row for user ID ${this.userId}`);
+                console.log(`Found existing terrain row for user ${this.myUsername} with ID ${userRow.id}`);
                 this.userRowId = userRow.id;
             } else {
-                console.log(`Creating new terrain row for user ID ${this.userId}`);
+                console.log(`No terrain row found for user ${this.myUsername}, creating new row`);
                 userRow = await this.room.collection('userTerrain').create({
-                    userId: this.userId,
-                    username: this.myUsername,
                     changes: {},
+                    changeCount: 0,
                     lastModified: new Date().toISOString()
                 });
                 this.userRowId = userRow.id;
+                console.log(`Created new terrain row with ID ${this.userRowId}`);
             }
             
             // Apply all users' changes
             userTerrainRows.forEach(row => {
                 if (row.changes && Object.keys(row.changes).length > 0) {
+                    console.log(`Applying ${Object.keys(row.changes).length} changes from user ${row.username}`);
                     this.applyUserChanges(row.changes);
                 }
             });
@@ -210,28 +209,30 @@ export class TerrainDatabase {
                 const strokeStartTime = this.strokeStartTime || new Date().toISOString();
                 
                 if (this.userRowId) {
-                    // Get the current user row by userId
-                    let userRows = await this.room.collection('userTerrain').filter({userId: this.userId}).getList();
-                    let userRow = userRows.length > 0 ? userRows[0] : null;
+                    // Get the current user row
+                    let userRow = await this.room.collection('userTerrain').filter({id: this.userRowId}).getList();
+                    console.log(`Looking for row with ID ${this.userRowId}`, userRow);
                     
-                    if (userRow) {
+                    if (userRow && userRow.length > 0) {
                         // Update existing row with merged changes
-                        const existingChanges = userRow.changes || {};
+                        const existingChanges = userRow[0].changes || {};
                         const mergedChanges = {...existingChanges, ...changedVertices};
                         
-                        await this.room.collection('userTerrain').update(userRow.id, {
+                        console.log(`Updating terrain row ${this.userRowId} for user ${this.myUsername}`);
+                        await this.room.collection('userTerrain').update(this.userRowId, {
                             changes: mergedChanges,
                             changeCount: Object.keys(mergedChanges).length,
                             lastModified: new Date().toISOString(),
                             strokeStartTime: strokeStartTime,
                             strokeEndTime: strokeEndTime
                         });
-                        this.userRowId = userRow.id;
                     } else {
-                        console.warn("User row not found by userId, creating a new one");
+                        console.warn(`User row with ID ${this.userRowId} not found, creating a new one`);
+                        // Get latest rows to check what's in the database
+                        const allRows = await this.room.collection('userTerrain').getList();
+                        console.log('Current database rows:', allRows.map(r => ({ id: r.id, username: r.username })));
+                        
                         const newRow = await this.room.collection('userTerrain').create({
-                            userId: this.userId,
-                            username: this.myUsername,
                             changes: changedVertices,
                             changeCount: changeCount,
                             lastModified: new Date().toISOString(),
@@ -239,12 +240,12 @@ export class TerrainDatabase {
                             strokeEndTime: strokeEndTime
                         });
                         this.userRowId = newRow.id;
+                        console.log(`Created new terrain row with ID ${this.userRowId}`);
                     }
                 } else {
                     // Create a new row for this user
+                    console.log(`No row ID stored, creating new terrain row for ${this.myUsername}`);
                     const newRow = await this.room.collection('userTerrain').create({
-                        userId: this.userId,
-                        username: this.myUsername,
                         changes: changedVertices,
                         changeCount: changeCount,
                         lastModified: new Date().toISOString(),
@@ -252,6 +253,7 @@ export class TerrainDatabase {
                         strokeEndTime: strokeEndTime
                     });
                     this.userRowId = newRow.id;
+                    console.log(`Created new terrain row with ID ${this.userRowId}`);
                 }
                 
                 // Periodically save a full snapshot for faster loading
