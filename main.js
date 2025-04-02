@@ -61,7 +61,8 @@ const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true; // Smooth camera movement
 controls.dampingFactor = 0.1;
 controls.target.set(0, 0, 0); // Focus on the center of the terrain
-
+controls.minDistance = 10; // Prevent zooming too close
+controls.maxDistance = 200; // Prevent zooming too far out
 
 // --- Terrain Editing ---
 const raycaster = new THREE.Raycaster();
@@ -191,4 +192,3 @@ function animate() {
 // Initial setup calls
 updateActiveButton(); // Set initial active button state
 animate();
-
