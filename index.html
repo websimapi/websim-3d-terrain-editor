@@ -5,28 +5,42 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>3D Terrain Editor</title>
     <style>
-        body { margin: 0; overflow: hidden; background-color: #222; color: white; font-family: sans-serif; }
+        body { margin: 0; overflow: hidden; background-color: #222; color: white; font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; }
         canvas { display: block; }
-        #controls { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.7); padding: 10px; border-radius: 5px; }
-        #controls label, #controls input, #controls button { display: block; margin-bottom: 5px; }
-        #controls input[type="range"] { width: 100%; }
-        #controls button { padding: 5px 10px; cursor: pointer; }
-        #controls button.active { background-color: #55aaff; color: white; }
+        #controls { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.7); padding: 15px; border-radius: 8px; z-index: 10; display: flex; flex-direction: column; gap: 10px; }
+        .control-group { display: flex; flex-direction: column; gap: 5px; }
+        .control-group label { font-weight: bold; font-size: 0.9em; }
+        .control-group input[type="range"] { width: 150px; cursor: pointer; }
+        .button-group { display: flex; gap: 5px; margin-top: 5px;}
+        .button-group button { padding: 8px 12px; cursor: pointer; border: none; border-radius: 4px; background-color: #555; color: white; transition: background-color 0.2s ease; }
+        .button-group button.active { background-color: #4682B4; /* Steel Blue */ box-shadow: 0 0 5px #4682B4; }
+        .button-group button:hover:not(.active) { background-color: #777; }
+        .slider-value { font-size: 0.8em; color: #ccc; margin-left: 5px; }
+        #flattenHeightControl { display: none; /* Initially hidden */ }
     </style>
 </head>
 <body>
     <div id="controls">
-        <label for="brushSize">Brush Size:</label>
-        <input type="range" id="brushSize" name="brushSize" min="1" max="20" value="5">
-        <label for="brushStrength">Brush Strength:</label>
-        <input type="range" id="brushStrength" name="brushStrength" min="0.1" max="5" step="0.1" value="1">
-        <div>
-            <button id="raiseBtn" class="active">Raise</button>
-            <button id="lowerBtn">Lower</button>
-            <button id="flattenBtn">Flatten</button> <!-- Added Flatten button -->
+        <div class="control-group">
+            <label for="brushSize">Brush Size: <span id="brushSizeValue" class="slider-value">5</span></label>
+            <input type="range" id="brushSize" name="brushSize" min="1" max="30" value="5">
         </div>
-         <label for="flattenHeight">Flatten Height:</label> <!-- Added Flatten Height Slider -->
-        <input type="range" id="flattenHeight" name="flattenHeight" min="-10" max="30" step="0.5" value="0">
+        <div class="control-group">
+            <label for="brushStrength">Brush Strength: <span id="brushStrengthValue" class="slider-value">1.0</span></label>
+            <input type="range" id="brushStrength" name="brushStrength" min="0.1" max="5" step="0.1" value="1">
+        </div>
+        <div class="control-group">
+            <label>Tool:</label>
+            <div class="button-group">
+                <button id="raiseBtn" class="active" data-tool="raise">Raise</button>
+                <button id="lowerBtn" data-tool="lower">Lower</button>
+                <button id="flattenBtn" data-tool="flatten">Flatten</button>
+            </div>
+        </div>
+         <div class="control-group" id="flattenHeightControl">
+            <label for="flattenHeight">Flatten Height: <span id="flattenHeightValue" class="slider-value">0.0</span></label>
+            <input type="range" id="flattenHeight" name="flattenHeight" min="-20" max="40" step="0.5" value="0">
+        </div>
     </div>
     <script type="importmap">
     {
@@ -40,5 +54,3 @@
 <script defer src="https://static.cloudflareinsights.com/beacon.min.js/v8c78df7c7c0f484497ecbca7046644da1771523124516" integrity="sha512-8DS7rgIrAmghBFwoOTujcf6D9rXvH8xm8JQ1Ja01h9QX8EzXldiszufYa4IFfKdLUKTTrnSFXLDkUEOTrZQ8Qg==" data-cf-beacon='{"version":"2024.11.0","token":"4c6229722a6346bc8eb5cb0e5eae5d41","server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
 </body>
 </html>
-
-
