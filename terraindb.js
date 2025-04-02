@@ -285,6 +285,3 @@ export class TerrainDatabase {
         }
     }
 }
-
-// Export the class to be accessible from main.js
-export { TerrainDatabase };
