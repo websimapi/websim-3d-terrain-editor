@@ -324,7 +324,20 @@ function updateBrushIndicator() {
         
         // Update color for paint brush
         if (currentTool === 'color' && colorManager) {
-            brushIndicator.material.color.set(colorManager.currentColor);
+            const isTextureUrl = typeof colorManager.currentColor === 'string' && 
+                                 (colorManager.currentColor.startsWith('http') || 
+                                  colorManager.currentColor.startsWith('data:image'));
+            
+            if (isTextureUrl) {
+                colorManager.textureHandler.applyToMaterial(brushIndicator.material, colorManager.currentColor);
+            } else {
+                // Reset to regular color
+                if (brushIndicator.material.map) {
+                    brushIndicator.material.map.dispose();
+                    brushIndicator.material.map = null;
+                }
+                brushIndicator.material.color.set(colorManager.currentColor);
+            }
             brushIndicator.material.wireframe = false;
             brushIndicator.material.opacity = 0.6;
         } else {

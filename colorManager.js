@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { TextureHandler } from './textureHandler.js';
 
 export class ColorManager {
     constructor(room, geometry, scene) {
@@ -9,6 +10,7 @@ export class ColorManager {
         this.colorChanges = {};
         this.terrainColors = {};
         this.statusElement = document.getElementById('save-status');
+        this.textureHandler = new TextureHandler();
         
         // Color palette
         this.colorPalette = [
@@ -320,6 +322,9 @@ export class ColorManager {
         const vertex = new THREE.Vector3();
         let colorModified = false;
 
+        // Check if current color is a texture URL
+        const isTextureUrl = this.textureHandler.isTextureUrl(this.currentColor);
+        
         // Apply color to vertices within brush radius
         for (let i = 0; i < positions.count; i++) {
             vertex.fromBufferAttribute(positions, i);
@@ -332,22 +337,32 @@ export class ColorManager {
                 // Smoother falloff using cosine function
                 const falloff = Math.cos((distance / brushRadius) * Math.PI / 2);
                 
-                // Apply color with falloff for blending
-                const color = new THREE.Color(this.currentColor);
-                
-                // If we already have a color, blend with existing
-                const existingColor = new THREE.Color();
-                existingColor.fromBufferAttribute(colorAttribute, i);
-                
-                // Lerp between existing and new color based on falloff and strength
-                const blendFactor = falloff * (brushStrength / 5);
-                existingColor.lerp(color, blendFactor);
-                
-                // Apply the color
-                colorAttribute.setXYZ(i, existingColor.r, existingColor.g, existingColor.b);
-                
-                // Store the color change for database
-                this.colorChanges[i] = '#' + existingColor.getHexString();
+                if (isTextureUrl) {
+                    // Store texture URL directly for database
+                    this.colorChanges[i] = this.currentColor;
+                    
+                    // For rendering, just set a representative color for now
+                    // (actual texture will be applied by shader or material)
+                    const tempColor = new THREE.Color(0x888888); // Gray to represent texture
+                    colorAttribute.setXYZ(i, tempColor.r, tempColor.g, tempColor.b);
+                } else {
+                    // Apply color with falloff for blending
+                    const color = new THREE.Color(this.currentColor);
+                    
+                    // If we already have a color, blend with existing
+                    const existingColor = new THREE.Color();
+                    existingColor.fromBufferAttribute(colorAttribute, i);
+                    
+                    // Lerp between existing and new color based on falloff and strength
+                    const blendFactor = falloff * (brushStrength / 5);
+                    existingColor.lerp(color, blendFactor);
+                    
+                    // Apply the color
+                    colorAttribute.setXYZ(i, existingColor.r, existingColor.g, existingColor.b);
+                    
+                    // Store the color change for database
+                    this.colorChanges[i] = '#' + existingColor.getHexString();
+                }
                 
                 colorModified = true;
             }
