@@ -58,13 +58,13 @@ scene.add(terrain);
 // --- Controls ---
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true; // Smooth camera movement
-controls.dampingFactor = 0.05; // Further adjusted damping for smoothness
+controls.dampingFactor = 0.05; // Keep damping factor
 controls.screenSpacePanning = true; // Better panning behavior
 controls.minDistance = 5; // Lower min distance
 controls.maxDistance = 150; // Reduced max distance for better control
 controls.maxPolarAngle = Math.PI / 2.1; // Prevent camera going below horizon
 controls.target.set(0, 0, 0);
-controls.zoomSpeed = 0.5; // Adjusted zoom speed - lower value makes zoom less sensitive
+controls.zoomSpeed = 0.3; // *** DECREASED zoom speed further ***
 controls.rotateSpeed = 0.5; // Adjusted rotation speed
 controls.panSpeed = 0.5; // Adjusted pan speed
 
