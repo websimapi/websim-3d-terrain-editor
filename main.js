@@ -54,16 +54,26 @@ geometry.rotateX(-Math.PI / 2); // Rotate to be horizontal
 const positions = geometry.attributes.position;
 geometry.computeVertexNormals(); // Compute normals after modification
 
+let currentTool = 'raise'; // 'select', 'raise', 'lower', 'flatten', 'color'
+const brushIndicator = new THREE.Mesh(
+    new THREE.SphereGeometry(1, 16, 8),
+    new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, opacity: 0.5, transparent: true })
+);
+brushIndicator.visible = false;
+scene.add(brushIndicator);
+
 const material = new THREE.MeshStandardMaterial({
-    color: 0x66aa66, // Slightly different green
+    color: 0xffffff, // White base color (will be multiplied by vertex colors)
     side: THREE.DoubleSide,
-    metalness: 0.0, // Less metallic
-    roughness: 0.9 // More rough
+    metalness: 0.0,
+    roughness: 0.9,
+    vertexColors: false // Will be enabled when colors are loaded
 });
 
 const terrain = new THREE.Mesh(geometry, material);
 terrain.receiveShadow = true;
 terrain.castShadow = true;
+terrain.name = 'terrain'; // Name for easy reference
 scene.add(terrain);
 
 // --- Controls ---
@@ -123,15 +133,6 @@ function onMouseWheel(event) {
 const raycaster = new THREE.Raycaster();
 const mouse = new THREE.Vector2();
 let isMouseDown = false;
-let currentTool = 'raise'; // 'select', 'raise', 'lower', 'flatten'
-const brushIndicator = new THREE.Mesh(
-    new THREE.SphereGeometry(1, 16, 8),
-    new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, opacity: 0.5, transparent: true })
-);
-brushIndicator.visible = false;
-scene.add(brushIndicator);
-
-// --- Control Panel Elements ---
 const brushSizeSlider = document.getElementById('brushSize');
 const brushStrengthSlider = document.getElementById('brushStrength');
 const flattenHeightSlider = document.getElementById('flattenHeight');
@@ -232,7 +233,68 @@ function onPointerUpTerrain(event) {
             terrainDB.saveTerrainChangesWithTimestamp(geometry);
             terrainModified = false;
         }
+        
+        // Save color changes if any
+        if (Object.keys(colorChanges).length > 0 && terrainDB) {
+            terrainDB.saveColorChanges(colorChanges);
+            colorChanges = {}; // Reset changes after saving
+        }
     }
+}
+
+// Color palette
+const colorPalette = [
+    { hex: '#66aa66', name: 'Grass Green' },
+    { hex: '#228B22', name: 'Forest Green' },
+    { hex: '#8B4513', name: 'Brown' },
+    { hex: '#A0522D', name: 'Sienna' },
+    { hex: '#C2B280', name: 'Sand' },
+    { hex: '#F5DEB3', name: 'Wheat' },
+    { hex: '#7393B3', name: 'Blue Gray' },
+    { hex: '#FFFFFF', name: 'Snow' },
+    { hex: '#808080', name: 'Gray' },
+    { hex: '#2F4F4F', name: 'Dark Slate' },
+    { hex: '#000000', name: 'Black' },
+    { hex: '#8A9A5B', name: 'Moss Green' }
+];
+
+let currentColor = colorPalette[0].hex;
+let colorChanges = {};
+
+function initializeColorPalette() {
+    const swatchesContainer = document.getElementById('colorSwatches');
+    
+    colorPalette.forEach(color => {
+        const swatch = document.createElement('div');
+        swatch.className = 'color-swatch';
+        swatch.style.backgroundColor = color.hex;
+        swatch.title = color.name;
+        swatch.dataset.color = color.hex;
+        
+        // Mark the first color as active by default
+        if (color.hex === currentColor) {
+            swatch.classList.add('active');
+        }
+        
+        swatch.addEventListener('click', (e) => {
+            // Prevent brush application when clicking color
+            e.stopPropagation();
+            
+            // Update active swatch
+            document.querySelectorAll('.color-swatch').forEach(s => {
+                s.classList.remove('active');
+            });
+            swatch.classList.add('active');
+            
+            // Update current color
+            currentColor = color.hex;
+            
+            // Update brush indicator color
+            brushIndicator.material.color.set(currentColor);
+        });
+        
+        swatchesContainer.appendChild(swatch);
+    });
 }
 
 function updateBrushIndicator() {
@@ -242,10 +304,22 @@ function updateBrushIndicator() {
     if (intersects.length > 0) {
         const intersection = intersects[0];
         brushIndicator.position.copy(intersection.point);
-        const scale = parseFloat(brushSizeSlider.value) * 0.2; // Adjust scaling factor as needed
+        const scale = parseFloat(brushSizeSlider.value) * 0.2;
         brushIndicator.scale.set(scale, scale, scale);
-        // Only show brush indicator for non-selection tools
+        
+        // Only show brush indicator for brush tools
         brushIndicator.visible = (currentTool !== 'select');
+        
+        // Update color for paint brush
+        if (currentTool === 'color') {
+            brushIndicator.material.color.set(currentColor);
+            brushIndicator.material.wireframe = false;
+            brushIndicator.material.opacity = 0.6;
+        } else {
+            brushIndicator.material.color.set(0xffffff);
+            brushIndicator.material.wireframe = true;
+            brushIndicator.material.opacity = 0.5;
+        }
     } else {
         brushIndicator.visible = false;
     }
@@ -258,7 +332,6 @@ function applyBrush() {
     if (intersects.length > 0) {
         const intersection = intersects[0];
         const hitPoint = intersection.point;
-        // No need for faceIndex directly here, we use vertex proximity
 
         const brushRadius = parseFloat(brushSizeSlider.value);
         const brushStrength = parseFloat(brushStrengthSlider.value);
@@ -267,10 +340,23 @@ function applyBrush() {
         const positions = geometry.attributes.position;
         const vertex = new THREE.Vector3();
         let vertexModified = false;
+        let colorModified = false;
 
-        // Convert hitPoint to the terrain's local space if terrain has transformations
-        // In this simple case, terrain is at origin with no rotation, so world space = local space.
-        // If terrain was moved/rotated: hitPoint.applyMatrix4(terrain.matrixWorldInverse);
+        // Initialize color attribute if using color tool for the first time
+        if (currentTool === 'color' && !geometry.attributes.color) {
+            const colors = new Float32Array(positions.count * 3);
+            // Initialize with default terrain color (light green)
+            for (let i = 0; i < colors.length; i += 3) {
+                colors[i] = 0.4;     // R
+                colors[i + 1] = 0.6;  // G
+                colors[i + 2] = 0.4;  // B
+            }
+            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+            terrain.material.vertexColors = true;
+        }
+
+        // Get the color attribute if it exists
+        const colorAttribute = geometry.attributes.color;
 
         // Iterate through all vertices
         for (let i = 0; i < positions.count; i++) {
@@ -279,44 +365,63 @@ function applyBrush() {
             const dx = vertex.x - hitPoint.x;
             const dz = vertex.z - hitPoint.z;
             const distance = Math.sqrt(dx * dx + dz * dz);
-            // Or use 3D distance: const distance = vertex.distanceTo(hitPoint);
 
             if (distance < brushRadius) {
                 // Smoother falloff using cosine function
-                const falloff = Math.cos((distance / brushRadius) * Math.PI / 2); // Cosine falloff (0 at edge, 1 at center)
-                // Or simpler linear falloff: const falloff = Math.max(0, 1 - distance / brushRadius);
-
-                let currentHeight = positions.getY(i);
-                let newHeight = currentHeight;
-
-                // Apply tool effect based on strength and falloff
-                // Delta time could be incorporated for frame-rate independent modification,
-                // but for mouse drag it's often okay without it.
-                const strengthFactor = brushStrength * falloff * 0.15; // Adjustment factor for sensitivity
+                const falloff = Math.cos((distance / brushRadius) * Math.PI / 2);
+                const strengthFactor = brushStrength * falloff * 0.15;
 
                 if (currentTool === 'raise') {
-                    newHeight += strengthFactor;
+                    // ... existing raise code ...
+                    const currentHeight = positions.getY(i);
+                    const newHeight = currentHeight + strengthFactor;
+                    positions.setY(i, newHeight);
+                    vertexModified = true;
                 } else if (currentTool === 'lower') {
-                    newHeight -= strengthFactor;
+                    // ... existing lower code ...
+                    const currentHeight = positions.getY(i);
+                    const newHeight = currentHeight - strengthFactor;
+                    positions.setY(i, newHeight);
+                    vertexModified = true;
                 } else if (currentTool === 'flatten') {
-                    // Interpolate towards the target flatten height
-                    // Using lerp for smooth flattening effect
-                    newHeight = THREE.MathUtils.lerp(currentHeight, targetFlattenHeight, strengthFactor * 0.5); // Flattening can be slower
+                    // ... existing flatten code ...
+                    const currentHeight = positions.getY(i);
+                    const newHeight = THREE.MathUtils.lerp(currentHeight, targetFlattenHeight, strengthFactor * 0.5);
+                    positions.setY(i, newHeight);
+                    vertexModified = true;
+                } else if (currentTool === 'color' && colorAttribute) {
+                    // Apply color with falloff for blending
+                    const color = new THREE.Color(currentColor);
+                    
+                    // If we already have a color, blend with existing
+                    const existingColor = new THREE.Color();
+                    existingColor.fromBufferAttribute(colorAttribute, i);
+                    
+                    // Lerp between existing and new color based on falloff and strength
+                    const blendFactor = falloff * (brushStrength / 5);
+                    existingColor.lerp(color, blendFactor);
+                    
+                    // Apply the color
+                    colorAttribute.setXYZ(i, existingColor.r, existingColor.g, existingColor.b);
+                    
+                    // Store the color change for database
+                    colorChanges[i] = '#' + existingColor.getHexString();
+                    
+                    colorModified = true;
                 }
-
-                // Clamp height to prevent extreme values (optional)
-                // newHeight = THREE.MathUtils.clamp(newHeight, -20, 50);
-
-                positions.setY(i, newHeight);
-                vertexModified = true; // Mark that at least one vertex was changed
             }
         }
 
-        // If vertices were modified, update the geometry and set dirty flag for saving
+        // If vertices were modified, update the geometry
         if (vertexModified) {
             positions.needsUpdate = true;
-            geometry.computeVertexNormals(); // Recompute normals for correct lighting
-            terrainModified = true; // Mark for saving
+            geometry.computeVertexNormals();
+            terrainModified = true;
+        }
+        
+        // If colors were modified, update the color attribute
+        if (colorModified) {
+            colorAttribute.needsUpdate = true;
         }
     }
 }
@@ -386,5 +491,21 @@ updateSliderValue(brushSizeSlider, brushSizeValueSpan);
 updateSliderValue(brushStrengthSlider, brushStrengthValueSpan);
 updateSliderValue(flattenHeightSlider, flattenHeightValueSpan);
 updateActiveButton(); // Set initial active button state and flatten slider visibility
+
+const buttonGroup = document.querySelector('.button-group');
+const colorButton = document.createElement('button');
+colorButton.id = 'colorBtn';
+colorButton.dataset.tool = 'color';
+colorButton.innerHTML = `
+    <svg class="tool-icon" viewBox="0 0 24 24">
+        <path d="M7,14c-1.66,0-3,1.34-3,3c0,1.31-1.16,2-2,2c0.92,1.22,2.49,2,4,2c2.21,0,4-1.79,4-4
+    C10,15.34,8.66,14,7,14z M20.71,4.63l-1.34-1.34c-0.39-0.39-1.02-0.39-1.41,0L9,12.25L11.75,15l8.96-8.96
+    C21.1,5.65,21.1,5.02,20.71,4.63z"/>
+    </svg>
+    Paint
+`;
+buttonGroup.appendChild(colorButton);
+
+initializeColorPalette();
 initializeMultiplayer(); // Initialize multiplayer before starting animation
 animate();

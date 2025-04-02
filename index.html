@@ -18,6 +18,11 @@
         .tool-icon { width: 16px; height: 16px; fill: white; }
         .slider-value { font-size: 0.8em; color: #ccc; margin-left: 5px; }
         #flattenHeightControl { display: none; /* Initially hidden */ }
+        #colorPickerControl { margin-top: 10px; display: flex; flex-direction: column; gap: 5px; }
+        .color-swatch { width: 25px; height: 25px; border-radius: 4px; cursor: pointer; transition: transform 0.1s ease; }
+        .color-swatch:hover { transform: scale(1.1); }
+        .color-swatch.active { box-shadow: 0 0 0 2px white; transform: scale(1.1); }
+        .color-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; }
         #players-list { position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,0.7); padding: 15px; border-radius: 8px; z-index: 10; max-height: 300px; overflow-y: auto; }
         .player-item { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
         .player-avatar { width: 24px; height: 24px; border-radius: 50%; }
@@ -67,6 +72,10 @@
         <div class="control-group" id="flattenHeightControl">
             <label for="flattenHeight">Flatten Height: <span id="flattenHeightValue" class="slider-value">0.0</span></label>
             <input type="range" id="flattenHeight" name="flattenHeight" min="-20" max="40" step="0.5" value="0">
+        </div>
+        <div class="control-group" id="colorPickerControl">
+            <label>Terrain Color:</label>
+            <div class="color-grid" id="colorSwatches"></div>
         </div>
     </div>
     <div id="players-list">
