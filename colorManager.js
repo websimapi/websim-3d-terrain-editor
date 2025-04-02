@@ -10,6 +10,7 @@ export class ColorManager {
         this.terrainColors = {};
         this.statusElement = document.getElementById('save-status');
         this.userColorRowId = null; // Store the user's color row ID
+        this.userId = null; // User's persistent ID
         
         // Color palette
         this.colorPalette = [
@@ -147,18 +148,28 @@ export class ColorManager {
         try {
             this.myUsername = this.room.peers[this.room.clientId].username;
             
+            // Get or create persistent user ID (same as in TerrainDatabase)
+            this.userId = localStorage.getItem('terrainEditorUserId');
+            if (!this.userId) {
+                this.userId = 'user_' + this.myUsername + '_' + Date.now();
+                localStorage.setItem('terrainEditorUserId', this.userId);
+            }
+            console.log(`ColorManager using persistent user ID: ${this.userId}`);
+            
             // Get all users' color data
             const userColorRows = await this.room.collection('userColorData').getList();
             
-            // Find this user's row using username instead of ID
-            let userRow = userColorRows.find(row => row.username === this.myUsername);
+            // Find this user's row using userId instead of username
+            let userRow = userColorRows.find(row => row.userId === this.userId);
             
             if (userRow) {
-                console.log(`Found existing color row for user ${this.myUsername}`);
+                console.log(`Found existing color row for user ID ${this.userId}`);
                 this.userColorRowId = userRow.id;
             } else {
-                console.log(`Creating new color row for user ${this.myUsername}`);
+                console.log(`Creating new color row for user ID ${this.userId}`);
                 userRow = await this.room.collection('userColorData').create({
+                    userId: this.userId,
+                    username: this.myUsername,
                     colorData: {},
                     lastModified: new Date().toISOString()
                 });
@@ -202,8 +213,8 @@ export class ColorManager {
             
             // Save color data to user's row
             if (this.userColorRowId) {
-                // Get the current user row by username instead of ID
-                let userRows = await this.room.collection('userColorData').filter({username: this.myUsername}).getList();
+                // Get the current user row by userId instead of username
+                let userRows = await this.room.collection('userColorData').filter({userId: this.userId}).getList();
                 let userRow = userRows.length > 0 ? userRows[0] : null;
                 
                 if (userRow) {
@@ -218,8 +229,10 @@ export class ColorManager {
                     });
                     this.userColorRowId = userRow.id;
                 } else {
-                    console.warn("User color row not found by username, creating a new one");
+                    console.warn("User color row not found by userId, creating a new one");
                     const newRow = await this.room.collection('userColorData').create({
+                        userId: this.userId,
+                        username: this.myUsername,
                         colorData: this.colorChanges,
                         changeCount: Object.keys(this.colorChanges).length,
                         lastModified: new Date().toISOString()
@@ -229,6 +242,8 @@ export class ColorManager {
             } else {
                 // Create a new row for this user
                 const newRow = await this.room.collection('userColorData').create({
+                    userId: this.userId,
+                    username: this.myUsername,
                     colorData: this.colorChanges,
                     changeCount: Object.keys(this.colorChanges).length,
                     lastModified: new Date().toISOString()

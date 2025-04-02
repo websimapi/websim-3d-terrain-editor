@@ -15,10 +15,20 @@ export class TerrainDatabase {
         this.statusElement = document.getElementById('save-status');
         this.strokeStartTime = null;
         this.userRowId = null; // Store the user's row ID
+        this.userId = null; // User's persistent ID
     }
 
     async initialize() {
         this.myUsername = this.room.peers[this.room.clientId].username;
+        
+        // Generate or get persistent user ID
+        this.userId = localStorage.getItem('terrainEditorUserId');
+        if (!this.userId) {
+            this.userId = 'user_' + this.myUsername + '_' + Date.now();
+            localStorage.setItem('terrainEditorUserId', this.userId);
+        }
+        console.log(`Using persistent user ID: ${this.userId}`);
+        
         await this.loadTerrainData();
     }
 
@@ -47,15 +57,17 @@ export class TerrainDatabase {
             // Get all users' terrain changes
             const userTerrainRows = await this.room.collection('userTerrain').getList();
             
-            // Find this user's row using username instead of ID
-            let userRow = userTerrainRows.find(row => row.username === this.myUsername);
+            // Find this user's row using persistent userId instead of username
+            let userRow = userTerrainRows.find(row => row.userId === this.userId);
             
             if (userRow) {
-                console.log(`Found existing terrain row for user ${this.myUsername}`);
+                console.log(`Found existing terrain row for user ID ${this.userId}`);
                 this.userRowId = userRow.id;
             } else {
-                console.log(`Creating new terrain row for user ${this.myUsername}`);
+                console.log(`Creating new terrain row for user ID ${this.userId}`);
                 userRow = await this.room.collection('userTerrain').create({
+                    userId: this.userId,
+                    username: this.myUsername,
                     changes: {},
                     lastModified: new Date().toISOString()
                 });
@@ -198,8 +210,8 @@ export class TerrainDatabase {
                 const strokeStartTime = this.strokeStartTime || new Date().toISOString();
                 
                 if (this.userRowId) {
-                    // Get the current user row by username instead of ID
-                    let userRows = await this.room.collection('userTerrain').filter({username: this.myUsername}).getList();
+                    // Get the current user row by userId
+                    let userRows = await this.room.collection('userTerrain').filter({userId: this.userId}).getList();
                     let userRow = userRows.length > 0 ? userRows[0] : null;
                     
                     if (userRow) {
@@ -216,8 +228,10 @@ export class TerrainDatabase {
                         });
                         this.userRowId = userRow.id;
                     } else {
-                        console.warn("User row not found by username, creating a new one");
+                        console.warn("User row not found by userId, creating a new one");
                         const newRow = await this.room.collection('userTerrain').create({
+                            userId: this.userId,
+                            username: this.myUsername,
                             changes: changedVertices,
                             changeCount: changeCount,
                             lastModified: new Date().toISOString(),
@@ -229,6 +243,8 @@ export class TerrainDatabase {
                 } else {
                     // Create a new row for this user
                     const newRow = await this.room.collection('userTerrain').create({
+                        userId: this.userId,
+                        username: this.myUsername,
                         changes: changedVertices,
                         changeCount: changeCount,
                         lastModified: new Date().toISOString(),
