@@ -3,6 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TerrainDatabase } from './terraindb.js';
 import { PlayerManager } from './players.js';
 import { ColorManager } from './colorManager.js';
+import { TextureGenerator } from './textureGenerator.js';
 
 // Room setup for multiplayer
 const room = new WebsimSocket();
@@ -370,6 +371,13 @@ async function initializeMultiplayer() {
         colorManager = new ColorManager(room, geometry, scene);
         colorManager.initializeColorPalette();
         await colorManager.loadColorData();
+        
+        // Setup material to handle textures after loading data
+        colorManager.setupTexturedMaterial();
+        
+        // Initialize texture generator
+        const textureGenerator = new TextureGenerator(colorManager);
+        await textureGenerator.initialize();
         
         // Initialize player manager
         playerManager = new PlayerManager(room, scene);
