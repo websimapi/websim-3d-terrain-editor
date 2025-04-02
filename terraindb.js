@@ -9,215 +9,225 @@ export class TerrainDatabase {
         this.terrainHeightData = {}; // Stores { vertexIndex: height }
         // Track the ID of the single canonical height state record
         this.canonicalHeightRecordId = null;
-        // Track the timestamp of the currently applied height data to avoid loops
+        // Track the timestamp of the currently applied height data to avoid loops/redundancy
         this.lastAppliedTimestamp = null;
-        this.myUsername = ''; // Set in initialize (if needed)
+        this.myUsername = ''; // Set in initialize
         this.statusElement = document.getElementById('save-status');
         // Stores changes during the current stroke before merging into terrainHeightData
         this.currentStrokeHeightChanges = {};
         // Flag to prevent saving while loading initial data
         this.isLoading = true;
-        // Flag to track if initial state has been loaded/applied
-        this.initialDataLoaded = false;
         this.unsubscribeHeight = null; // To store unsubscribe function
-        this.initialLoadTimeout = null; // Timeout handle
-        this.COLLECTION_NAME = 'terrainHeightState'; // Constant for collection name
     }
 
     async loadTerrainData() {
-        console.log(`Initiating ${this.COLLECTION_NAME} loading...`);
         this.isLoading = true;
-        this.initialDataLoaded = false;
-        this.canonicalHeightRecordId = null;
-        this.lastAppliedTimestamp = null;
-        if (this.unsubscribeHeight) this.unsubscribeHeight();
-        if (this.initialLoadTimeout) clearTimeout(this.initialLoadTimeout);
+        if (this.unsubscribeHeight) this.unsubscribeHeight(); // Unsubscribe from previous listener if any
+        try {
+            console.log("Loading canonical terrain height state...");
+            const positions = this.geometry.attributes.position;
 
-        console.log(`Subscribing to ${this.COLLECTION_NAME} collection...`);
-        this.unsubscribeHeight = this.room.collection(this.COLLECTION_NAME).subscribe(async (states) => {
-            console.log(`${this.COLLECTION_NAME} subscription triggered. Received ${states.length} states. Initial load done: ${this.initialDataLoaded}`);
-            if (this.initialLoadTimeout) clearTimeout(this.initialLoadTimeout); // Clear timeout if subscription fires
+            // Fetch the list of state records (should ideally be just one canonical record)
+            const states = await this.room.collection('terrainHeightState').getList();
+            console.log(`Fetched ${states.length} terrainHeightState records.`);
+            let latestState = null;
 
-            if (!this.initialDataLoaded) {
-                // First data received from subscription
-                this.initialDataLoaded = true; // Mark that we received *something* (even empty)
-                if (states.length > 0) {
-                    // Find the canonical state (newest)
-                     // Filter out potentially malformed states first
-                    const validStates = states.filter(s => s.heightData && typeof s.heightData === 'object');
-                    if (validStates.length === 0) {
-                         console.warn(`${this.COLLECTION_NAME}: Subscription provided states, but none were valid. Creating default.`);
-                         await this.handleInitialLoadFailure(); // Create default record
-                         return; // Exit callback for this state list
-                    }
-
-                    const latestState = validStates.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
-                    console.log(`Applying initial canonical ${this.COLLECTION_NAME} state: ID=${latestState.id}, TS=${latestState.timestamp}`);
-                    this.applyHeightState(latestState); // Apply it (this sets canonical ID and timestamp)
-                    this.isLoading = false; // Allow saving now
-                } else {
-                    // Subscription fired but was empty - means no records exist. Create default.
-                    console.log(`Initial subscription for ${this.COLLECTION_NAME} returned empty. Creating default record.`);
-                    await this.handleInitialLoadFailure(); // Create default record
-                }
-                console.log(`${this.COLLECTION_NAME} initial load processing finished. isLoading: ${this.isLoading}`);
-                // Ensure geometry update after initial load/creation attempt
-                this.geometry.attributes.position.needsUpdate = true;
-                this.geometry.computeVertexNormals();
+            if (states.length > 0) {
+                // Sort by creation date just in case, take the newest
+                latestState = states.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+                this.canonicalHeightRecordId = latestState.id; // Store the ID
+                console.log(`Found latest height state record: ID=${this.canonicalHeightRecordId}, Timestamp=${latestState.timestamp}`);
+                this.applyHeightState(latestState); // Apply the initial state
             } else {
-                // Update received after initial load
-                 if (states.length > 0) {
-                    const validStates = states.filter(s => s.heightData && typeof s.heightData === 'object');
-                     if (validStates.length === 0) {
-                         console.warn(`${this.COLLECTION_NAME}: Update subscription provided states, but none were valid.`);
-                         return;
-                     }
-                    const updatedState = validStates.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
-                    console.log(`Processing ${this.COLLECTION_NAME} update: ID=${updatedState.id}, Timestamp=${updatedState.timestamp}, CurrentCanonicalID=${this.canonicalHeightRecordId}, LastAppliedTS=${this.lastAppliedTimestamp}`);
+                console.log("No canonical terrain height state found. Creating initial flat terrain state record.");
+                // If no state exists, initialize geometry to flat and create the first record
+                await this.createFlatTerrainStateRecord(); // This sets geometry and saves the first state
+            }
 
-                     // Apply if it's a new state (different timestamp) for the canonical record OR if the canonical ID somehow changed
-                    if (updatedState.id === this.canonicalHeightRecordId && updatedState.timestamp !== this.lastAppliedTimestamp) {
-                        console.log(`Applying updated ${this.COLLECTION_NAME} state via subscription (ID: ${updatedState.id}, TS: ${updatedState.timestamp})`);
-                        if(this.applyHeightState(updatedState)) {
+            // Subscribe to future updates
+            console.log(`Subscribing to terrainHeightState collection...`);
+            this.unsubscribeHeight = this.room.collection('terrainHeightState').subscribe((incomingStates) => {
+                 console.log(`Height subscription triggered. Received ${incomingStates.length} states.`);
+                if (this.isLoading) {
+                    console.log("Skipping height subscription update during initial load.");
+                    return;
+                }
+                if (incomingStates.length > 0) {
+                    const updatedState = incomingStates.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+                     console.log(`Processing height update: ID=${updatedState.id}, CanonicalID=${this.canonicalHeightRecordId}, Timestamp=${updatedState.timestamp}, LastAppliedTS=${this.lastAppliedTimestamp}`);
+
+                    // Apply if it's the canonical record (regardless of timestamp now)
+                    // This ensures external updates are always applied.
+                    // The local lastAppliedTimestamp is still updated after applying,
+                    // and also immediately after a user saves their *own* changes,
+                    // which helps prevent immediate re-application of one's own saves.
+                    if (updatedState.id === this.canonicalHeightRecordId) {
+                         // Check timestamp *only* for logging purposes, not for skipping application
+                         if (updatedState.timestamp === this.lastAppliedTimestamp) {
+                             console.log(`Applying height state via subscription (ID: ${updatedState.id}, TS: ${updatedState.timestamp}) - Timestamp matches last applied, but applying anyway.`);
+                         } else {
+                             console.log(`Applying updated height state via subscription (ID: ${updatedState.id}, TS: ${updatedState.timestamp})`);
+                         }
+
+                        if (this.applyHeightState(updatedState)) { // Apply the full state
+                            // Ensure geometry reflects the update
                             this.geometry.attributes.position.needsUpdate = true;
                             this.geometry.computeVertexNormals();
-                            console.log(`Geometry height updated from ${this.COLLECTION_NAME} subscription.`);
+                             console.log("Geometry updated from height subscription.");
+                        } else {
+                             console.log("applyHeightState indicated no change was needed (e.g., identical data).");
                         }
-                    } else if (updatedState.id !== this.canonicalHeightRecordId) {
-                        console.warn(`Canonical ${this.COLLECTION_NAME} record ID changed from ${this.canonicalHeightRecordId} to ${updatedState.id}. Applying new state.`);
-                        if(this.applyHeightState(updatedState)) { // applyState handles setting new canonical ID
-                             this.geometry.attributes.position.needsUpdate = true;
-                             this.geometry.computeVertexNormals();
-                            console.log(`Geometry height updated from new canonical ${this.COLLECTION_NAME} ID.`);
-                        }
+                    } else if (updatedState.id !== this.canonicalHeightRecordId && incomingStates.some(s => s.id === this.canonicalHeightRecordId)) {
+                         // If the canonical ID is present but not the latest, log a warning but don't switch.
+                         // This could happen in rare race conditions or if old records weren't cleaned up.
+                         console.warn(`Received update where latest state ID (${updatedState.id}) does not match canonical ID (${this.canonicalHeightRecordId}), but canonical record exists in update list. Sticking with canonical record.`);
+                         // Optional: Could try to find and apply the canonical record from the incomingStates list here if needed.
+                    }
+                    else if (updatedState.id !== this.canonicalHeightRecordId && !incomingStates.some(s => s.id === this.canonicalHeightRecordId)) {
+                        // If the canonical ID we know is *gone* and a new latest exists, switch to it.
+                         console.warn(`Canonical height record ID ${this.canonicalHeightRecordId} not found in latest updates. Switching canonical ID to ${updatedState.id}. Applying new state.`);
+                         this.canonicalHeightRecordId = updatedState.id;
+                         if (this.applyHeightState(updatedState)) {
+                            this.geometry.attributes.position.needsUpdate = true;
+                            this.geometry.computeVertexNormals();
+                             console.log("Geometry updated from new canonical height ID.");
+                         }
                     } else {
-                         console.log(`Skipping ${this.COLLECTION_NAME} update: Same timestamp or non-canonical ID.`);
+                         // This case should ideally not be reached with the above logic.
+                         console.log("Skipping height update: Condition not met (should not happen?).");
                     }
                 } else {
-                     console.warn(`Canonical ${this.COLLECTION_NAME} subscription returned empty list after initial load. Record might be deleted.`);
-                     this.canonicalHeightRecordId = null; // Clear the ID
-                     this.lastAppliedTimestamp = null;
-                     // Optionally reset to flat terrain here? Or wait for user action.
-                     // this.applyHeightState({ heightData: {}, timestamp: null });
+                    console.warn("Canonical height state subscription returned empty list. This might indicate the record was deleted.");
+                    // Consider re-creating the flat state if desired:
+                    // await this.createFlatTerrainStateRecord();
                 }
-            }
-        });
+            });
 
-        // Helper function for handling initial load failure (no records found)
-        const handleInitialLoadFailure = async () => {
-            try {
-                await this.createFlatTerrainStateRecord(); // Create and save the first record
-                console.log(`Default ${this.COLLECTION_NAME} record created successfully.`);
-            } catch (creationError) {
-                console.error(`Failed to create initial ${this.COLLECTION_NAME} record`, creationError);
-                this.applyHeightState({ heightData: {}, timestamp: null }); // Apply flat locally as fallback
-            } finally {
-                this.isLoading = false; // Allow saving/interaction even if creation failed
-            }
-        };
+            console.log("Terrain height state loading process complete.");
 
-
-        // Timeout as a fallback in case subscription doesn't fire quickly
-        this.initialLoadTimeout = setTimeout(async () => {
-             console.log(`${this.COLLECTION_NAME}: Checking initial load status after timeout.`);
-            if (!this.initialDataLoaded) {
-                console.warn(`${this.COLLECTION_NAME}: Initial data not received via subscription after timeout. Attempting to create default record.`);
-                 this.initialDataLoaded = true; // Mark as handled (attempted)
-                 await handleInitialLoadFailure(); // Use the same failure handler
-                 // Ensure geometry update after timeout handler
-                 this.geometry.attributes.position.needsUpdate = true;
-                 this.geometry.computeVertexNormals();
-            }
-        }, 5000); // 5 second timeout
+        } catch (error) {
+            console.error('Error loading terrain height state:', error);
+            // Fallback: ensure terrain is at least flat locally
+            console.log("Applying default flat state due to loading error.");
+            this.applyHeightState({ heightData: {}, timestamp: null }); // Apply empty data to reset
+        } finally {
+            this.isLoading = false; // Mark loading as complete *after* setup
+            console.log("isLoading set to false for terrain height.");
+            // Ensure geometry is updated visually after initial load attempt
+            this.geometry.attributes.position.needsUpdate = true;
+            this.geometry.computeVertexNormals();
+             console.log("Final geometry update after terrain height load.");
+        }
     }
 
-
+    // Apply a full height data map (from the canonical state record)
     applyHeightState(stateData) {
-        console.log(`Attempting to apply height state. Incoming ID: ${stateData?.id}, TS: ${stateData?.timestamp}, Last Applied TS: ${this.lastAppliedTimestamp}`);
+        console.log(`Attempting to apply height state. Incoming TS: ${stateData?.timestamp}, Last Applied TS: ${this.lastAppliedTimestamp}`);
         if (!stateData || typeof stateData.heightData !== 'object') {
             console.warn('Invalid height state data received:', stateData);
             stateData = { heightData: {}, timestamp: null }; // Use default empty data for reset
         }
-
-        // Avoid re-applying the same state received via subscription or initial load
-        // Allow applying if canonical ID has changed even if timestamp is same (edge case)
-        if (stateData.timestamp && stateData.timestamp === this.lastAppliedTimestamp && stateData.id === this.canonicalHeightRecordId) {
-             console.log(`Skipping application of height state: Timestamp ${stateData.timestamp} already applied for ID ${stateData.id}.`);
-            return false; // Indicate no change was made
+         // Avoid re-applying the same state *if the timestamp matches*.
+         // This prevents redundant applications triggered by the subscription immediately
+         // after our own save action, BUT allows external updates even if timestamp somehow matches.
+         // The main subscription logic change already ensures external updates get through.
+         // This check inside applyHeightState is a secondary guard against unnecessary processing.
+        if (stateData.timestamp && stateData.timestamp === this.lastAppliedTimestamp) {
+            // Check if the actual data has changed - this can happen if applyHeightState is called
+            // directly after a local modification but before a save/subscription cycle.
+            // A simple check: compare number of keys or a sample of values.
+            // For simplicity, we'll still rely on the subscription logic handling most cases
+            // and just log that we *would* skip based on timestamp if called directly.
+            // The subscription logic now forces application anyway, overriding this check.
+            // console.log(`Skipping application of height state: Timestamp ${stateData.timestamp} already applied.`);
+            // return false; // Indicate no change was made based *only* on timestamp
+            // --- Removed the actual return false based on timestamp alone ---
         }
 
-        const stateIdForLog = stateData.id || '(local default)';
-        console.log(`Applying canonical height state (ID: ${stateIdForLog}, TS: ${stateData.timestamp})...`);
+        console.log(`Applying canonical height state (TS: ${stateData.timestamp})...`);
         const positions = this.geometry.attributes.position;
         const loadedHeightData = stateData.heightData || {};
         const numLoadedKeys = Object.keys(loadedHeightData).length;
         console.log(`State contains ${numLoadedKeys} height entries.`);
         let verticesApplied = 0;
         let verticesDefaulted = 0;
+        let changeOccurred = false; // Track if any vertex *actually* changed height
 
         // Clear current local state before applying the new one
-        this.terrainHeightData = {};
+        // No, don't clear - we need to compare with the existing state to see if changes occurred
+        // this.terrainHeightData = {}; // <-- Removed this line
 
         // Apply heights from state, default to 0 if index missing
         for (let i = 0; i < positions.count; i++) {
             const loadedHeight = loadedHeightData[i];
-            // Ensure height is a number, default to 0 if invalid or missing
-            const height = (loadedHeight !== undefined && loadedHeight !== null && !isNaN(Number(loadedHeight))) ? Number(loadedHeight) : 0;
+            const targetHeight = (loadedHeight !== undefined && loadedHeight !== null) ? Number(loadedHeight) : 0; // Default to 0 height
+            const currentHeight = positions.getY(i); // Get current height from geometry buffer
 
-            positions.setY(i, height); // Apply directly
+            // Only set if different from current geometry
+            // Use a small tolerance for floating point comparison
+            if (Math.abs(currentHeight - targetHeight) > 0.0001) {
+                positions.setY(i, targetHeight);
+                changeOccurred = true; // Mark that a change happened
+                 // Update local cache ONLY if geometry was changed
+                 this.terrainHeightData[i] = targetHeight;
+            } else {
+                // Ensure local cache is consistent even if no change needed
+                // This handles cases where cache might be out of sync but geometry is correct
+                if (this.terrainHeightData[i] !== targetHeight) {
+                     this.terrainHeightData[i] = targetHeight;
+                     // Don't set changeOccurred = true here, as geometry didn't update
+                }
+            }
 
-            // Ensure local cache reflects the applied state (including defaults)
-            this.terrainHeightData[i] = height;
 
-            if (loadedHeight !== undefined && loadedHeight !== null && !isNaN(Number(loadedHeight))) {
+            if (loadedHeight !== undefined && loadedHeight !== null) {
                 verticesApplied++;
             } else {
-                 if(loadedHeight !== undefined && loadedHeight !== null) { // Log if it existed but was invalid
-                     console.warn(`Invalid height value '${loadedHeight}' at index ${i}. Defaulting to 0.`);
-                 }
                 verticesDefaulted++;
             }
         }
 
-        console.log(`Applied height state: ${verticesApplied} vertices from data, ${verticesDefaulted} defaulted to 0.`);
-         if (stateData.timestamp) {
-            this.lastAppliedTimestamp = stateData.timestamp; // Track the timestamp of applied data
-        }
-         // If applying state from a record, update the canonical ID
-         if (stateData.id) {
-            this.canonicalHeightRecordId = stateData.id;
-         }
-        // Caller handles geometry updates (needsUpdate, computeVertexNormals)
-        return true; // Indicate that state was applied
+        console.log(`Applied height state: ${verticesApplied} vertices from data, ${verticesDefaulted} defaulted to 0. Actual vertex height changes: ${changeOccurred}`);
+        this.lastAppliedTimestamp = stateData.timestamp; // Track the timestamp of applied data
+        // Caller handles geometry updates (needsUpdate, computeVertexNormals) IF changeOccurred is true
+        return changeOccurred; // Indicate if state application resulted in geometry change
     }
 
+    // Called during mouse drag to stage changes for the current stroke
     accumulateHeightChange(index, newHeight) {
         // Store the latest height for this vertex within the current stroke
         this.currentStrokeHeightChanges[index] = newHeight;
     }
 
+    // Save the *entire current* height state by updating the canonical record
     async saveTerrainChanges() {
-        // Prevent saving during initial load OR if initial data hasn't been confirmed yet
-         if (this.isLoading || !this.initialDataLoaded) {
-             console.log("Skipping height save: Still loading or initial data not confirmed.");
-             return;
-         }
+        // Prevent saving during initial load
+        if (this.isLoading) {
+            console.log("Skipping save: Still loading initial height data.");
+            return;
+        }
+
         // Merge changes from the current stroke into the main state BEFORE checking if empty
         let changesFromStroke = Object.keys(this.currentStrokeHeightChanges).length > 0;
         if (changesFromStroke) {
              console.log(`Merging ${Object.keys(this.currentStrokeHeightChanges).length} height changes from stroke into canonical state.`);
-            this.terrainHeightData = { ...this.terrainHeightData, ...this.currentStrokeHeightChanges };
-            this.currentStrokeHeightChanges = {}; // Reset stroke changes
+            // Update the canonical data cache with the stroke changes
+             Object.assign(this.terrainHeightData, this.currentStrokeHeightChanges);
+             // Clear stroke changes *after* merging
+             this.currentStrokeHeightChanges = {};
         } else {
             console.log("No height changes accumulated in the current stroke.");
+            // If there were no changes in the stroke, we don't need to save.
             return;
         }
 
+
+        // Double check if terrainHeightData is actually populated (should be after load or create)
         if (Object.keys(this.terrainHeightData).length === 0) {
             console.warn("Attempted to save but terrainHeightData is empty. Aborting save.");
+             this.currentStrokeHeightChanges = {}; // Still clear stroke changes maybe? Or revert? For now, clear.
             return;
         }
-
 
         try {
             this.showSaveStatus(true, 'Saving height...');
@@ -231,20 +241,19 @@ export class TerrainDatabase {
             console.log(`Attempting to save height state. Record ID: ${this.canonicalHeightRecordId}. Timestamp: ${currentTimestamp}`);
 
             if (this.canonicalHeightRecordId) {
-                 // Update the existing canonical record
-                 try {
-                    await this.room.collection(this.COLLECTION_NAME).update(this.canonicalHeightRecordId, saveData);
-                    console.log(`Updated canonical height state record: ${this.canonicalHeightRecordId}`);
-                    this.lastAppliedTimestamp = currentTimestamp; // Update timestamp only on successful update
-                 } catch(updateError) {
-                     console.error(`Failed to update height record ${this.canonicalHeightRecordId}, attempting to create new. Error:`, updateError);
-                      // If update failed (e.g., record deleted), try creating a new one
-                     await this.createCanonicalRecord(saveData); // Use the same data
-                 }
+                // Update the existing canonical record
+                await this.room.collection('terrainHeightState').update(this.canonicalHeightRecordId, saveData);
+                console.log(`Updated canonical height state record: ${this.canonicalHeightRecordId}`);
+                // Update last applied timestamp locally immediately after successful save.
+                // This prevents the subscription update for our *own* change from causing a redundant application.
+                this.lastAppliedTimestamp = currentTimestamp;
             } else {
-                // Create the first canonical record (or replacement)
-                console.log("Canonical height record ID not found or update failed, creating new one...");
-                await this.createCanonicalRecord(saveData);
+                // Create the first canonical record if it doesn't exist yet
+                console.log("Canonical height record ID not found, creating new one...");
+                const newRecord = await this.room.collection('terrainHeightState').create(saveData);
+                this.canonicalHeightRecordId = newRecord.id; // Store the new ID
+                this.lastAppliedTimestamp = currentTimestamp; // Set timestamp for the newly created record
+                console.log(`Created canonical height state record: ${this.canonicalHeightRecordId}`);
             }
 
             this.showSaveStatus(false);
@@ -252,55 +261,52 @@ export class TerrainDatabase {
         } catch (error) {
             console.error('Error saving terrain height state:', error);
             this.showSaveStatus(false, 'Error saving height!', true);
-            // Reset stroke changes even on error to avoid resaving failed data
+            // Consider how to handle errors - maybe revert local changes?
+            // For now, clear stroke changes to avoid resaving the same failed data.
             this.currentStrokeHeightChanges = {};
         } finally {
-            // Ensure stroke changes are cleared AFTER the attempt (success or fail)
-            this.currentStrokeHeightChanges = {};
+             // Ensure stroke changes are cleared AFTER the attempt (success or fail)
+             // This was already done after merge or if no changes, keep it this way.
+             // this.currentStrokeHeightChanges = {}; // Redundant remove
         }
     }
-
-    // Helper to create the canonical record and set state
-    async createCanonicalRecord(saveData) {
-         const newRecord = await this.room.collection(this.COLLECTION_NAME).create(saveData);
-         this.canonicalHeightRecordId = newRecord.id; // Store the new ID
-         this.lastAppliedTimestamp = saveData.timestamp; // Set timestamp for the newly created record
-         console.log(`Created/Replaced canonical ${this.COLLECTION_NAME} record: ${this.canonicalHeightRecordId}`);
-          // Ensure initial load flag is set if this happens very early
-         if (!this.initialDataLoaded) {
-            this.initialDataLoaded = true;
-            this.isLoading = false;
-         }
-    }
-
 
     // Create the initial flat terrain state record if none exists
     async createFlatTerrainStateRecord() {
-        console.log(`Creating initial flat ${this.COLLECTION_NAME} record...`);
-        const positions = this.geometry.attributes.position;
-        const heightData = {};
-        this.terrainHeightData = {}; // Reset local cache
+        try {
+            console.log("Creating initial flat terrain state record...");
+            const positions = this.geometry.attributes.position;
+            const heightData = {};
+            this.terrainHeightData = {}; // Reset local cache
 
-        for (let i = 0; i < positions.count; i++) {
-            heightData[i] = 0;
-            positions.setY(i, 0); // Set geometry flat
-            this.terrainHeightData[i] = 0; // Update local cache
+            for (let i = 0; i < positions.count; i++) {
+                heightData[i] = 0;
+                positions.setY(i, 0); // Set geometry flat
+                this.terrainHeightData[i] = 0; // Update local cache
+            }
+
+            // Geometry update (needsUpdate, normals) handled by caller (loadTerrainData)
+
+            const initialTimestamp = new Date().toISOString();
+            const saveData = {
+                heightData: heightData,
+                vertexCount: positions.count,
+                isInitial: true,
+                timestamp: initialTimestamp
+            };
+
+            // Save the initial state record
+            console.log("Sending create request for initial flat height state...");
+            const stateRecord = await this.room.collection('terrainHeightState').create(saveData);
+            this.canonicalHeightRecordId = stateRecord.id; // Store the ID of the created record
+            this.lastAppliedTimestamp = initialTimestamp; // Track its timestamp
+            console.log('Created and saved initial flat terrain state record:', this.canonicalHeightRecordId, 'TS:', initialTimestamp);
+            return heightData; // Return the data for immediate application if needed
+
+        } catch (error) {
+            console.error('Error creating flat terrain state record:', error);
+            throw error; // Re-throw to indicate initialization failure potential
         }
-
-        // Geometry update (needsUpdate, normals) handled by caller
-
-        const initialTimestamp = new Date().toISOString();
-        const saveData = {
-            heightData: heightData,
-            vertexCount: positions.count,
-            isInitial: true,
-            timestamp: initialTimestamp
-        };
-
-        // Create the canonical record
-        await this.createCanonicalRecord(saveData);
-         // No need for showSaveStatus here, it's part of initialization
-        console.log('Initial flat terrain state record creation complete.');
     }
 
     // Show save status indicator

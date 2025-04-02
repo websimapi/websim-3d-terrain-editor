@@ -52,6 +52,9 @@ const terrainSegments = 128; // Increased detail
 const geometry = new THREE.PlaneGeometry(terrainSize, terrainSize, terrainSegments, terrainSegments);
 geometry.rotateX(-Math.PI / 2); // Rotate to be horizontal
 
+// Vertices will be set during initialization by TerrainDatabase/ColorManager
+geometry.computeVertexNormals(); // Initial computation
+
 let currentTool = 'raise'; // 'select', 'raise', 'lower', 'flatten', 'color'
 const brushIndicator = new THREE.Mesh(
     new THREE.SphereGeometry(1, 16, 8),
@@ -62,6 +65,7 @@ scene.add(brushIndicator);
 
 // Material setup - vertexColors will be enabled by ColorManager if needed
 const material = new THREE.MeshStandardMaterial({
+    // color: 0xffffff, // Base color ignored when vertexColors is true
     side: THREE.DoubleSide,
     metalness: 0.0,
     roughness: 0.9,
@@ -114,6 +118,7 @@ function updateActiveButton() {
         }
     });
     flattenHeightControl.style.display = currentTool === 'flatten' ? 'flex' : 'none';
+    // Update brush indicator immediately when tool changes
     updateBrushIndicator();
 }
 
@@ -122,6 +127,7 @@ brushSizeSlider.addEventListener('input', () => updateSliderValue(brushSizeSlide
 brushStrengthSlider.addEventListener('input', () => updateSliderValue(brushStrengthSlider, brushStrengthValueSpan));
 flattenHeightSlider.addEventListener('input', () => updateSliderValue(flattenHeightSlider, flattenHeightValueSpan));
 
+// Add listener for all tool buttons
 toolButtons.forEach(button => {
     button.addEventListener('click', (e) => {
         e.stopPropagation(); // Prevent event bubbling
@@ -138,18 +144,20 @@ renderer.domElement.addEventListener('contextmenu', (event) => event.preventDefa
 
 // --- Event Handlers ---
 function onPointerMoveTerrainCheck(event) {
+    // Prevent interaction if clicking on UI elements overlaying the canvas
     const controlsPanel = document.getElementById('controls');
     const playersPanel = document.getElementById('players-list');
     if ( (controlsPanel && controlsPanel.contains(event.target)) ||
          (playersPanel && playersPanel.contains(event.target)) ) {
-        brushIndicator.visible = false;
+        brushIndicator.visible = false; // Hide brush if pointer is over UI
         return;
     }
+
 
     mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
     mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
 
-    updateBrushIndicator();
+    updateBrushIndicator(); // Update indicator position/visibility
 
     if (isMouseDown && currentTool !== 'select') {
         applyBrush();
@@ -162,53 +170,58 @@ function onPointerDownTerrain(event) {
     if ( (controlsPanel && controlsPanel.contains(event.target)) ||
          (playersPanel && playersPanel.contains(event.target)) ||
          event.target !== renderer.domElement ) {
-        return;
+        return; // Ignore clicks on UI or outside canvas
     }
-    if (event.button !== 0) return;
+    if (event.button !== 0) return; // Ignore non-left clicks
 
     isMouseDown = true;
 
+    // Reset modification flags for the new stroke
     terrainHeightModifiedInStroke = false;
     terrainColorModifiedInStroke = false;
 
     if (currentTool !== 'select') {
-        controls.enabled = false;
-        updateBrushIndicator();
-        applyBrush();
+        controls.enabled = false; // Disable camera pan/rotate while editing
+        updateBrushIndicator(); // Ensure indicator is visible
+        applyBrush(); // Apply brush on the first click immediately
     } else {
-        controls.enabled = true;
+         controls.enabled = true; // Ensure camera is enabled in select mode
     }
 }
 
-async function onPointerUpTerrain(event) {
+async function onPointerUpTerrain(event) { // Make async to await saves
     if (event.button === 0 && isMouseDown) {
         isMouseDown = false;
-        controls.enabled = true;
+        controls.enabled = true; // Re-enable camera controls
 
+        // Save terrain height changes if any occurred during the stroke
         if (terrainHeightModifiedInStroke && terrainDB) {
             console.log("Stroke ended, saving height state...");
             try {
-                await terrainDB.saveTerrainChanges();
-                terrainHeightModifiedInStroke = false;
+                await terrainDB.saveTerrainChanges(); // Await the save operation
+                terrainHeightModifiedInStroke = false; // Reset flag on successful save
             } catch (error) {
                 console.error("Failed to save height state:", error);
+                // Handle error, maybe keep the flag true to retry?
             }
         }
 
+        // Save terrain color changes if any occurred during the stroke
         if (terrainColorModifiedInStroke && colorManager) {
             console.log("Stroke ended, saving color state...");
-            try {
-                await colorManager.saveColorChanges();
-                terrainColorModifiedInStroke = false;
-            } catch(error) {
-                console.error("Failed to save color state:", error);
-            }
+             try {
+                await colorManager.saveColorChanges(); // Await the save operation
+                terrainColorModifiedInStroke = false; // Reset flag on successful save
+             } catch(error) {
+                 console.error("Failed to save color state:", error);
+             }
         }
     }
 }
 
+
 function applyBrush() {
-    if (currentTool === 'select') return;
+    if (currentTool === 'select') return; // Don't apply brush if selecting
 
     raycaster.setFromCamera(mouse, camera);
     const intersects = raycaster.intersectObject(terrain);
@@ -223,17 +236,21 @@ function applyBrush() {
 
         const positions = geometry.attributes.position;
         const vertex = new THREE.Vector3();
-        let vertexModified = false;
+        let vertexModified = false; // Tracks if any vertex was changed in *this specific call*
 
+        // --- Color Application ---
         if (currentTool === 'color' && colorManager) {
             const appliedColor = colorManager.applyColorBrush(hitPoint, brushRadius, brushStrength);
             if (appliedColor) {
-                terrainColorModifiedInStroke = true;
-                vertexModified = true;
+                terrainColorModifiedInStroke = true; // Mark that color was changed in this stroke
+                vertexModified = true; // Indicate geometry update needed
             }
-            return;
+            // Don't apply height changes if painting
+            // Normals don't change with color, geometry update handled by ColorManager
+            return; // Stop here if painting
         }
 
+        // --- Height Application ---
         let heightChanged = false;
         for (let i = 0; i < positions.count; i++) {
             vertex.fromBufferAttribute(positions, i);
@@ -243,7 +260,7 @@ function applyBrush() {
 
             if (distance < brushRadius) {
                 const falloff = Math.cos((distance / brushRadius) * Math.PI / 2);
-                const strengthFactor = brushStrength * falloff * 0.15;
+                const strengthFactor = brushStrength * falloff * 0.15; // Base strength adjustment
                 const currentHeight = positions.getY(i);
                 let newHeight = currentHeight;
 
@@ -252,44 +269,53 @@ function applyBrush() {
                 } else if (currentTool === 'lower') {
                     newHeight = currentHeight - strengthFactor;
                 } else if (currentTool === 'flatten') {
+                     // Lerp towards target height based on strength/falloff
                     newHeight = THREE.MathUtils.lerp(currentHeight, targetFlattenHeight, strengthFactor * 0.5);
                 }
 
+                // Only update if the height actually changed significantly
                 if (Math.abs(newHeight - currentHeight) > 0.001) {
-                    if (terrainDB) {
-                        terrainDB.accumulateHeightChange(i, newHeight);
-                        positions.setY(i, newHeight);
-                    }
-                    heightChanged = true;
-                    vertexModified = true;
+                     positions.setY(i, newHeight);
+                     // Accumulate change in TerrainDatabase for saving later
+                     if (terrainDB) {
+                         terrainDB.accumulateHeightChange(i, newHeight); // Track for saving entire state later
+                     }
+                     heightChanged = true; // Mark that height was modified in this applyBrush call
+                     vertexModified = true;
                 }
             }
         }
 
+        // If height vertices were modified in this call, update geometry and set stroke flag
         if (heightChanged) {
             positions.needsUpdate = true;
-            geometry.computeVertexNormals();
-            terrainHeightModifiedInStroke = true;
+            geometry.computeVertexNormals(); // Normals need update when height changes
+            terrainHeightModifiedInStroke = true; // Mark that height was changed in this stroke
         }
     }
 }
+
 
 function updateBrushIndicator() {
     raycaster.setFromCamera(mouse, camera);
     const intersects = raycaster.intersectObject(terrain);
 
-    if (intersects.length > 0 && currentTool !== 'select' && brushIndicator.visible !== false) {
+    // Hide brush if pointer is over UI (checked in pointermove) or if select tool active
+     if (intersects.length > 0 && currentTool !== 'select' && brushIndicator.visible) {
         const intersection = intersects[0];
         brushIndicator.position.copy(intersection.point);
-        const scale = parseFloat(brushSizeSlider.value) * 0.25;
+        // Make indicator size relative to brush setting
+        const scale = parseFloat(brushSizeSlider.value) * 0.25; // Adjust scaling factor as needed
         brushIndicator.scale.set(scale, scale, scale);
-        brushIndicator.visible = true;
+        // brushIndicator.visible = true; // Visibility handled in pointermove and here
 
+        // Update color/style based on tool
         if (currentTool === 'color' && colorManager) {
             brushIndicator.material.color.set(colorManager.currentColor);
             brushIndicator.material.wireframe = false;
             brushIndicator.material.opacity = 0.6;
         } else {
+            // Default indicator for height tools
             brushIndicator.material.color.set(0xffffff);
             brushIndicator.material.wireframe = true;
             brushIndicator.material.opacity = 0.5;
@@ -305,11 +331,16 @@ function onWindowResize() {
     renderer.setSize(window.innerWidth, window.innerHeight);
 }
 
+// Listen for color changes from ColorManager UI
 document.addEventListener('colorChanged', (event) => {
+    // const { color, name } = event.detail; // Data available if needed
+    // Switch to color tool automatically when a color is picked
     currentTool = 'color';
-    updateActiveButton();
+    updateActiveButton(); // Update UI to show color tool active
+    // Brush indicator color is updated in updateBrushIndicator based on currentTool
 });
 
+// Initialize Database, Color, Players
 async function initializeMultiplayer() {
     try {
         console.log("Initializing multiplayer...");
@@ -317,38 +348,48 @@ async function initializeMultiplayer() {
         myUsername = room.peers[room.clientId].username;
         console.log(`Connected as: ${myUsername}`);
 
+        // Initialize Color Manager first - it might need to create the color attribute
         colorManager = new ColorManager(room, geometry, scene);
+        colorManager.initializeColorPalette(); // Setup UI swatches
+        await colorManager.loadColorData(); // Load canonical state, apply to geometry
+
+        // Initialize Terrain Database - depends on geometry possibly modified by color init
         terrainDB = new TerrainDatabase(room, geometry, scene);
+        await terrainDB.loadTerrainData(); // Load canonical state, apply to geometry
+
+        // Initialize Player Manager
         playerManager = new PlayerManager(room, scene);
+        playerManager.initialize(); // Also sets up presence subscription internally
 
-        colorManager.initializeColorPalette();
-
-        const colorLoadPromise = colorManager.loadColorData();
-        const terrainLoadPromise = terrainDB.loadTerrainData();
-
-        await Promise.all([colorLoadPromise, terrainLoadPromise]);
-        console.log("Initial terrain and color data loading/setup complete.");
-
-        playerManager.initialize();
-
+        // Start periodic player position updates
         setInterval(() => {
             if (playerManager) {
                 playerManager.updatePlayerPosition(camera, controls);
             }
-        }, 200);
+        }, 200); // Send updates 5 times/sec
 
+        console.log("Multiplayer initialization complete.");
+        // Final geometry update after all loading
+        geometry.attributes.position.needsUpdate = true;
+        if (geometry.attributes.color) {
+            geometry.attributes.color.needsUpdate = true;
+        }
         geometry.computeVertexNormals();
-        console.log("Multiplayer initialization complete. Final geometry state applied.");
+
+
     } catch (error) {
         console.error('Error initializing multiplayer:', error);
+        // Maybe display an error message to the user
     }
 }
 
+// --- Animation Loop ---
 function animate() {
     requestAnimationFrame(animate);
 
-    controls.update();
+    controls.update(); // Required for damping
 
+    // Render player markers if player manager is initialized
     if (playerManager) {
         playerManager.renderPlayerPositions();
     }
@@ -356,10 +397,13 @@ function animate() {
     renderer.render(scene, camera);
 }
 
+// --- Initial Setup Calls ---
 updateSliderValue(brushSizeSlider, brushSizeValueSpan);
 updateSliderValue(brushStrengthSlider, brushStrengthValueSpan);
 updateSliderValue(flattenHeightSlider, flattenHeightValueSpan);
-updateActiveButton();
 
-initializeMultiplayer();
-animate();
+// Paint button is now static HTML, ensure listener is attached correctly above.
+updateActiveButton(); // Set initial active button state and UI visibility
+
+initializeMultiplayer(); // Initialize multiplayer and load data
+animate(); // Start the animation loop

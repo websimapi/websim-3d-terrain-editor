@@ -32,11 +32,7 @@ export class ColorManager {
         this.lastAppliedTimestamp = null;
         // Flag to prevent saving while loading initial data
         this.isLoading = true;
-        // Flag to track if initial state has been loaded/applied
-        this.initialDataLoaded = false;
         this.unsubscribeColor = null; // To store unsubscribe function
-        this.initialLoadTimeout = null; // Timeout handle
-        this.COLLECTION_NAME = 'terrainColorState'; // Constant for collection name
     }
 
     initializeColorPalette() {
@@ -145,23 +141,25 @@ export class ColorManager {
     }
 
     async saveColorChanges() {
-        // Prevent saving during initial load OR if initial data hasn't been confirmed yet
-        if (this.isLoading || !this.initialDataLoaded) {
-            console.log("Skipping color save: Still loading or initial data not confirmed.");
+        // Prevent saving during initial load
+        if (this.isLoading) {
+            console.log("Skipping color save: Still loading initial color data.");
             return;
         }
+
         // Merge changes from the current stroke into the main state BEFORE checking if empty
         // Note: applyColorBrush now updates terrainColors directly, so merging isn't strictly needed
         // but we still check currentStrokeColorChanges to see if a save is warranted.
         let changesFromStroke = Object.keys(this.currentStrokeColorChanges).length > 0;
         if (!changesFromStroke) {
-            console.log("No color changes accumulated in the current stroke.");
-            // If there were no changes in the stroke, we don't need to save.
-            this.currentStrokeColorChanges = {}; // Ensure it's clear
-            return;
+             console.log("No color changes accumulated in the current stroke.");
+             // If there were no changes in the stroke, we don't need to save.
+             this.currentStrokeColorChanges = {}; // Ensure it's clear
+             return;
         }
         // Clear the stroke changes *before* attempting save, as terrainColors holds the merged state
         this.currentStrokeColorChanges = {};
+
 
         // Double check if terrainColors is actually populated
         if (Object.keys(this.terrainColors).length === 0) {
@@ -182,19 +180,17 @@ export class ColorManager {
 
             if (this.canonicalColorRecordId) {
                 // Update the existing record
-                try {
-                    await this.room.collection(this.COLLECTION_NAME).update(this.canonicalColorRecordId, saveData);
-                    console.log(`Updated canonical color state record: ${this.canonicalColorRecordId}`);
-                    this.lastAppliedTimestamp = currentTimestamp; // Update timestamp only on successful update
-                } catch (updateError) {
-                    console.error(`Failed to update color record ${this.canonicalColorRecordId}, attempting to create new. Error:`, updateError);
-                    // If update failed (e.g., record deleted), try creating a new one
-                    await this.createCanonicalRecord(saveData); // Use the same data
-                }
+                await this.room.collection('terrainColorState').update(this.canonicalColorRecordId, saveData);
+                console.log(`Updated canonical color state record: ${this.canonicalColorRecordId}`);
+                // Update last applied timestamp locally immediately after successful save
+                this.lastAppliedTimestamp = currentTimestamp;
             } else {
-                // Create the first canonical record (or replacement)
-                console.log("Canonical color record ID not found or update failed, creating new one...");
-                await this.createCanonicalRecord(saveData);
+                // Create the first canonical record
+                console.log("Canonical color record ID not found, creating new one...");
+                const newRecord = await this.room.collection('terrainColorState').create(saveData);
+                this.canonicalColorRecordId = newRecord.id; // Store the new ID
+                this.lastAppliedTimestamp = currentTimestamp; // Set timestamp for the newly created record
+                console.log(`Created canonical color state record: ${this.canonicalColorRecordId}`);
             }
 
             this.showSaveStatus(false);
@@ -210,19 +206,6 @@ export class ColorManager {
         }
     }
 
-    // Helper to create the canonical record and set state
-    async createCanonicalRecord(saveData) {
-        const newRecord = await this.room.collection(this.COLLECTION_NAME).create(saveData);
-        this.canonicalColorRecordId = newRecord.id; // Store the new ID
-        this.lastAppliedTimestamp = saveData.timestamp; // Set timestamp for the newly created record
-        console.log(`Created/Replaced canonical color state record: ${this.canonicalColorRecordId}`);
-        // Ensure initial load flag is set if this happens very early
-        if (!this.initialDataLoaded) {
-            this.initialDataLoaded = true;
-            this.isLoading = false;
-        }
-    }
-
     applyColorState(stateData) {
         console.log(`Attempting to apply color state. Incoming TS: ${stateData?.timestamp}, Last Applied TS: ${this.lastAppliedTimestamp}`);
         if (!stateData || typeof stateData.colorData !== 'object') {
@@ -231,16 +214,13 @@ export class ColorManager {
             // Ensure attribute exists even if resetting
             this.ensureColorAttribute();
         }
-        // Avoid re-applying the same state received via subscription or initial load
-        // Allow applying if canonical ID has changed even if timestamp is same (edge case)
-        if (stateData.timestamp && stateData.timestamp === this.lastAppliedTimestamp && stateData.id === this.canonicalColorRecordId) {
-            console.log(`Skipping application of color state: Timestamp ${stateData.timestamp} already applied for ID ${stateData.id}.`);
+         // Avoid re-applying the same state received via subscription or initial load
+        if (stateData.timestamp && stateData.timestamp === this.lastAppliedTimestamp) {
+            console.log(`Skipping application of color state: Timestamp ${stateData.timestamp} already applied.`);
             return false; // Indicate no change was made
         }
 
-        // If stateData doesn't have an ID (e.g., initial default creation), generate one for logging
-        const stateIdForLog = stateData.id || '(local default)';
-        console.log(`Applying canonical color state (ID: ${stateIdForLog}, TS: ${stateData.timestamp})...`);
+        console.log(`Applying canonical color state (TS: ${stateData.timestamp})...`);
         this.ensureColorAttribute(); // Ensure attribute exists and material uses vertex colors
         const colorAttribute = this.geometry.attributes.color;
         const loadedColorData = stateData.colorData || {};
@@ -261,7 +241,7 @@ export class ColorManager {
             try {
                 const color = colorHex ? new THREE.Color(colorHex) : defaultColor;
                 colorAttribute.setXYZ(i, color.r, color.g, color.b);
-                appliedColorHex = colorHex ? colorHex : defaultColorHex; // Track what was actually applied/cached
+                 appliedColorHex = colorHex ? colorHex : defaultColorHex; // Track what was actually applied/cached
                 if (colorHex) {
                     verticesApplied++;
                 } else {
@@ -271,7 +251,7 @@ export class ColorManager {
                 console.warn(`Invalid color hex '${colorHex}' at index ${i}. Applying default (${defaultColorHex}).`);
                 colorAttribute.setXYZ(i, defaultColor.r, defaultColor.g, defaultColor.b);
                 verticesDefaulted++;
-                appliedColorHex = defaultColorHex;
+                 appliedColorHex = defaultColorHex;
             }
             // Ensure local cache matches exactly what's applied, including defaults
             this.terrainColors[i] = appliedColorHex;
@@ -279,119 +259,92 @@ export class ColorManager {
 
         console.log(`Applied color state: ${verticesApplied} vertices from data, ${verticesDefaulted} defaulted to ${defaultColorHex}.`);
         colorAttribute.needsUpdate = true; // Mark buffer for update
-        if (stateData.timestamp) {
-            this.lastAppliedTimestamp = stateData.timestamp; // Track the timestamp of applied data
-        }
-        // If applying state from a record, update the canonical ID
-        if (stateData.id) {
-            this.canonicalColorRecordId = stateData.id;
-        }
+        this.lastAppliedTimestamp = stateData.timestamp; // Track the timestamp of applied data
         return true; // Indicate state was applied
     }
 
     async loadColorData() {
-        console.log(`Initiating ${this.COLLECTION_NAME} loading...`);
         this.isLoading = true;
-        this.initialDataLoaded = false;
-        this.canonicalColorRecordId = null;
-        this.lastAppliedTimestamp = null;
-        if (this.unsubscribeColor) this.unsubscribeColor();
-        if (this.initialLoadTimeout) clearTimeout(this.initialLoadTimeout);
+        if (this.unsubscribeColor) this.unsubscribeColor(); // Unsubscribe from previous listener
+        this.ensureColorAttribute(); // Make sure attribute exists BEFORE loading data
 
-        this.ensureColorAttribute(); // Make sure attribute exists BEFORE loading/applying data
+        try {
+            console.log("Loading canonical color state...");
 
-        console.log(`Subscribing to ${this.COLLECTION_NAME} collection...`);
-        this.unsubscribeColor = this.room.collection(this.COLLECTION_NAME).subscribe(async (states) => {
-            console.log(`${this.COLLECTION_NAME} subscription triggered. Received ${states.length} states. Initial load done: ${this.initialDataLoaded}`);
-            if (this.initialLoadTimeout) clearTimeout(this.initialLoadTimeout); // Clear timeout if subscription fires
+            // Fetch the list of state records
+            const states = await this.room.collection('terrainColorState').getList();
+             console.log(`Fetched ${states.length} terrainColorState records.`);
+            let latestState = null;
 
-            if (!this.initialDataLoaded) {
-                // First data received from subscription
-                this.initialDataLoaded = true; // Mark that we received *something* (even empty)
-                if (states.length > 0) {
-                    // Find the canonical state (newest)
-                    const latestState = states.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
-                    console.log(`Applying initial canonical ${this.COLLECTION_NAME} state: ID=${latestState.id}, TS=${latestState.timestamp}`);
-                    this.applyColorState(latestState); // Apply it (this sets canonical ID and timestamp)
-                    this.isLoading = false; // Allow saving now
-                } else {
-                    // Subscription fired but was empty - means no records exist. Create default.
-                    console.log(`Initial subscription for ${this.COLLECTION_NAME} returned empty. Creating default record.`);
-                    try {
-                        await this.initializeDefaultColorsAndSave();
-                        console.log(`Default ${this.COLLECTION_NAME} record created successfully.`);
-                    } catch (creationError) {
-                        console.error(`Failed to create initial ${this.COLLECTION_NAME} record`, creationError);
-                        this.initializeDefaultColors(true); // Apply default locally as fallback
-                    } finally {
-                        this.isLoading = false;
-                        if (this.geometry.attributes.color) {
-                            this.geometry.attributes.color.needsUpdate = true;
-                        }
-                    }
-                }
-                console.log(`${this.COLLECTION_NAME} initial load processing finished. isLoading: ${this.isLoading}`);
-                // Ensure geometry update after initial load/creation attempt
-                if (this.geometry.attributes.color) {
-                    this.geometry.attributes.color.needsUpdate = true;
-                }
-
+            if (states.length > 0) {
+                // Sort by creation date, take the newest
+                latestState = states.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+                this.canonicalColorRecordId = latestState.id; // Store the ID
+                console.log(`Found latest color state record: ID=${this.canonicalColorRecordId}, Timestamp=${latestState.timestamp}`);
+                this.applyColorState(latestState); // Apply initial state
             } else {
-                // Update received after initial load
-                if (states.length > 0) {
-                    const updatedState = states.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
-                    console.log(`Processing ${this.COLLECTION_NAME} update: ID=${updatedState.id}, Timestamp=${updatedState.timestamp}, CurrentCanonicalID=${this.canonicalColorRecordId}, LastAppliedTS=${this.lastAppliedTimestamp}`);
+                console.log("No canonical color state found. Initializing terrain with default colors.");
+                // Initialize terrainColors with default if no state exists, but don't save yet
+                this.initializeDefaultColors(true); // Pass true to force local init even if not needed
+                // The first save operation will create the canonical record.
+            }
 
-                    // Apply if it's a new state (different timestamp) for the canonical record OR if the canonical ID somehow changed
+             // Subscribe to future updates
+            console.log(`Subscribing to terrainColorState collection...`);
+            this.unsubscribeColor = this.room.collection('terrainColorState').subscribe((incomingStates) => {
+                 console.log(`Color subscription triggered. Received ${incomingStates.length} states.`);
+                 if (this.isLoading) {
+                    console.log("Skipping color subscription update during initial load.");
+                    return;
+                }
+                if (incomingStates.length > 0) {
+                    const updatedState = incomingStates.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+                     console.log(`Processing color update: ID=${updatedState.id}, Timestamp=${updatedState.timestamp}, LastAppliedTS=${this.lastAppliedTimestamp}`);
+                     // Apply if it's a new state for the canonical record OR if the canonical ID changed
                     if (updatedState.id === this.canonicalColorRecordId && updatedState.timestamp !== this.lastAppliedTimestamp) {
-                        console.log(`Applying updated ${this.COLLECTION_NAME} state via subscription (ID: ${updatedState.id}, TS: ${updatedState.timestamp})`);
-                        if (this.applyColorState(updatedState)) {
-                            console.log(`Geometry color updated from ${this.COLLECTION_NAME} subscription.`);
+                         console.log(`Applying updated color state via subscription (ID: ${updatedState.id}, TS: ${updatedState.timestamp})`);
+                        if(this.applyColorState(updatedState)) {
+                            // Geometry update (needsUpdate) handled within applyColorState
+                            console.log("Geometry color updated from subscription.");
                         }
                     } else if (updatedState.id !== this.canonicalColorRecordId) {
-                        console.warn(`Canonical ${this.COLLECTION_NAME} record ID changed from ${this.canonicalColorRecordId} to ${updatedState.id}. Applying new state.`);
-                        if (this.applyColorState(updatedState)) { // applyState handles setting new canonical ID
-                            console.log(`Geometry color updated from new canonical ${this.COLLECTION_NAME} ID.`);
-                        }
+                         console.warn(`Canonical color record ID changed from ${this.canonicalColorRecordId} to ${updatedState.id}. Applying new state.`);
+                         this.canonicalColorRecordId = updatedState.id;
+                         if(this.applyColorState(updatedState)) {
+                             console.log("Geometry color updated from new canonical color ID.");
+                         }
                     } else {
-                        console.log(`Skipping ${this.COLLECTION_NAME} update: Same timestamp or non-canonical ID.`);
+                         console.log("Skipping color update: Same timestamp or non-canonical ID.");
                     }
                 } else {
-                    console.warn(`Canonical ${this.COLLECTION_NAME} subscription returned empty list after initial load. Record might be deleted.`);
-                    this.canonicalColorRecordId = null; // Clear the ID
-                    this.lastAppliedTimestamp = null;
-                    // Optionally reset to default colors here? Or wait for user action.
-                    // this.initializeDefaultColors(true);
+                    console.warn("Canonical color state subscription returned empty list. This might indicate the record was deleted.");
+                     // Consider resetting to default colors:
+                     // this.initializeDefaultColors(true);
                 }
-            }
-        });
+            });
 
-        // Timeout as a fallback in case subscription doesn't fire quickly
-        this.initialLoadTimeout = setTimeout(async () => {
-            console.log(`${this.COLLECTION_NAME}: Checking initial load status after timeout.`);
-            if (!this.initialDataLoaded) {
-                console.warn(`${this.COLLECTION_NAME}: Initial data not received via subscription after timeout. Attempting to create default record.`);
-                this.initialDataLoaded = true; // Mark as handled (attempted)
-                try {
-                    await this.initializeDefaultColorsAndSave();
-                    console.log(`Default ${this.COLLECTION_NAME} record created successfully after timeout.`);
-                } catch (err) {
-                    console.error(`Failed to create default ${this.COLLECTION_NAME} record after timeout`, err);
-                    this.initializeDefaultColors(true); // Apply default locally as fallback
-                } finally {
-                    this.isLoading = false;
-                    if (this.geometry.attributes.color) {
-                        this.geometry.attributes.color.needsUpdate = true;
-                    }
-                }
+            console.log("Color state loading process complete.");
+
+        } catch (error) {
+            console.error('Error loading color state:', error);
+             console.log("Applying default colors due to loading error.");
+            this.initializeDefaultColors(true); // Fallback to default on error
+        } finally {
+            this.isLoading = false; // Mark loading as complete
+             console.log("isLoading set to false for color.");
+            // Ensure geometry update after loading attempt
+            if (this.geometry.attributes.color) {
+                this.geometry.attributes.color.needsUpdate = true;
+                 console.log("Final geometry color update after color load process.");
             }
-        }, 5000); // 5 second timeout
+        }
     }
 
-    // Initialize local cache and geometry with default colors
+    // Initialize local cache and optionally geometry with default colors
     initializeDefaultColors(forceApplyToGeometry = false) {
         const attributeExisted = !!this.geometry.attributes.color;
         const attributeCreated = this.ensureColorAttribute(); // Ensures attribute exists
+        // Only apply to geometry if forced OR if the attribute was just created
         const applyToGeometry = forceApplyToGeometry || attributeCreated;
 
         console.log(`Initializing default colors. Force apply: ${forceApplyToGeometry}, Attribute created now: ${attributeCreated}`);
@@ -409,28 +362,11 @@ export class ColorManager {
         }
 
         if (applyToGeometry && colorAttribute) {
-            colorAttribute.needsUpdate = true;
-            console.log("Applied default colors to geometry buffer.");
+             colorAttribute.needsUpdate = true;
+             console.log("Applied default colors to geometry buffer.");
         }
         console.log(`Initialized local terrainColors cache with default color: ${defaultColorHex}`);
-    }
-
-    // New method: Initialize default colors AND save them as the first canonical record
-    async initializeDefaultColorsAndSave() {
-        console.log(`Initializing default ${this.COLLECTION_NAME} state and creating first record...`);
-        this.initializeDefaultColors(true); // Apply default colors locally and to geometry
-
-        const currentTimestamp = new Date().toISOString();
-        const saveData = {
-            colorData: this.terrainColors,
-            vertexCount: this.geometry.attributes.color.count,
-            timestamp: currentTimestamp,
-            isInitial: true // Mark as the first default state
-        };
-
-        // Create the canonical record
-        await this.createCanonicalRecord(saveData);
-        // No need to call showSaveStatus here, it's part of initialization
+        // Do not save here, let the first user modification trigger the save/create.
     }
 
     showSaveStatus(isVisible, message = 'Saving color...', isError = false) {
@@ -442,8 +378,8 @@ export class ColorManager {
         if (isVisible && !isError) {
             // Automatically hide after a short delay
             setTimeout(() => {
-                // Check if the message is still the *same saving* message before hiding
-                // Allows error messages or subsequent saving messages to persist
+                 // Check if the message is still the *same saving* message before hiding
+                 // Allows error messages or subsequent saving messages to persist
                 if (this.statusElement.textContent === message && !isError) {
                     this.statusElement.style.opacity = '0';
                 }
