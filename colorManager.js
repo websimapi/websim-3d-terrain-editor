@@ -6,12 +6,11 @@ export class ColorManager {
         this.geometry = geometry;
         this.scene = scene;
         this.terrainMesh = scene.getObjectByName('terrain');
-        this.colorChanges = {};
-        this.terrainColors = {};
+        // Tracks changes made *during* the current paint stroke
+        this.currentStrokeColorChanges = {};
+        // Represents the fully loaded/merged color state of the terrain
+        this.terrainColors = {}; // Stores { vertexIndex: hexColorString }
         this.statusElement = document.getElementById('save-status');
-        this.userColorRowId = localStorage.getItem('colorUserRowId'); // Get from localStorage if available
-        
-        // Color palette
         this.colorPalette = [
             { hex: '#66aa66', name: 'Grass Green' },
             { hex: '#228B22', name: 'Forest Green' },
@@ -27,40 +26,34 @@ export class ColorManager {
             { hex: '#8A9A5B', name: 'Moss Green' }
         ];
         this.currentColor = this.colorPalette[0].hex;
-        this.allColorChanges = {};
-        this.myUsername = '';
+        // Track applied changes to prevent re-applying from subscription
+        this.processedColorChangeIds = new Set();
+        this.changesSinceSnapshot = 0;
+        this.SNAPSHOT_THRESHOLD = 10; // Create snapshot every N changes
     }
 
     initializeColorPalette() {
         const swatchesContainer = document.getElementById('colorSwatches');
         swatchesContainer.innerHTML = ''; // Clear any existing swatches
-        
+
         this.colorPalette.forEach(color => {
             const swatch = document.createElement('div');
             swatch.className = 'color-swatch';
             swatch.style.backgroundColor = color.hex;
             swatch.title = color.name;
             swatch.dataset.color = color.hex;
-            
-            // Mark the first color as active by default
+
             if (color.hex === this.currentColor) {
                 swatch.classList.add('active');
             }
-            
+
             swatch.addEventListener('click', (e) => {
-                // Prevent brush application when clicking color
                 e.stopPropagation();
-                
-                // Update active swatch
                 document.querySelectorAll('.color-swatch').forEach(s => {
                     s.classList.remove('active');
                 });
                 swatch.classList.add('active');
-                
-                // Update current color
                 this.currentColor = color.hex;
-                
-                // Trigger event for main.js to handle
                 const event = new CustomEvent('colorChanged', {
                     detail: {
                         color: this.currentColor,
@@ -69,7 +62,7 @@ export class ColorManager {
                 });
                 document.dispatchEvent(event);
             });
-            
+
             swatchesContainer.appendChild(swatch);
         });
     }
@@ -77,240 +70,318 @@ export class ColorManager {
     ensureColorAttribute() {
         if (!this.geometry.attributes.color) {
             const colors = new Float32Array(this.geometry.attributes.position.count * 3);
-            // Initialize with default terrain color (light green)
+            // Initialize with a default base color (e.g., Grass Green)
+            const defaultColor = new THREE.Color(this.colorPalette[0].hex);
             for (let i = 0; i < colors.length; i += 3) {
-                colors[i] = 0.4;     // R
-                colors[i + 1] = 0.6;  // G
-                colors[i + 2] = 0.4;  // B
+                colors[i] = defaultColor.r;
+                colors[i + 1] = defaultColor.g;
+                colors[i + 2] = defaultColor.b;
             }
             this.geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+            console.log("Created initial color buffer attribute.");
         }
-        
-        // Enable vertex colors on the material
-        if (this.terrainMesh && this.terrainMesh.material) {
+
+        if (this.terrainMesh && this.terrainMesh.material && !this.terrainMesh.material.vertexColors) {
             this.terrainMesh.material.vertexColors = true;
             this.terrainMesh.material.needsUpdate = true;
+            console.log("Enabled vertex colors on material.");
         }
     }
 
     applyColorBrush(hitPoint, brushRadius, brushStrength) {
         this.ensureColorAttribute();
-        
+
         const positions = this.geometry.attributes.position;
         const colorAttribute = this.geometry.attributes.color;
         const vertex = new THREE.Vector3();
         let colorModified = false;
+        const targetColor = new THREE.Color(this.currentColor);
 
-        // Apply color to vertices within brush radius
         for (let i = 0; i < positions.count; i++) {
             vertex.fromBufferAttribute(positions, i);
-            // Calculate distance in the XZ plane for cylindrical brush effect
             const dx = vertex.x - hitPoint.x;
             const dz = vertex.z - hitPoint.z;
             const distance = Math.sqrt(dx * dx + dz * dz);
 
             if (distance < brushRadius) {
-                // Smoother falloff using cosine function
                 const falloff = Math.cos((distance / brushRadius) * Math.PI / 2);
-                
-                // Apply color with falloff for blending
-                const color = new THREE.Color(this.currentColor);
-                
-                // If we already have a color, blend with existing
+                const blendFactor = falloff * (brushStrength / 5); // Strength adjustment
+
                 const existingColor = new THREE.Color();
                 existingColor.fromBufferAttribute(colorAttribute, i);
-                
-                // Lerp between existing and new color based on falloff and strength
-                const blendFactor = falloff * (brushStrength / 5);
-                existingColor.lerp(color, blendFactor);
-                
-                // Apply the color
+                existingColor.lerp(targetColor, blendFactor);
+
                 colorAttribute.setXYZ(i, existingColor.r, existingColor.g, existingColor.b);
-                
-                // Store the color change for database
-                this.colorChanges[i] = '#' + existingColor.getHexString();
-                
+
+                // Store the change for this stroke
+                this.currentStrokeColorChanges[i] = '#' + existingColor.getHexString();
+
                 colorModified = true;
             }
         }
-        
-        // If colors were modified, update the color attribute
+
         if (colorModified) {
             colorAttribute.needsUpdate = true;
-            return true;
+            return true; // Indicate that the geometry was modified
         }
-        
         return false;
     }
 
+    // Save the accumulated changes from the current stroke
+    async saveColorChanges() {
+        if (Object.keys(this.currentStrokeColorChanges).length === 0) return;
+
+        try {
+            this.showSaveStatus(true);
+            const changesToSave = { ...this.currentStrokeColorChanges };
+            const changeCount = Object.keys(changesToSave).length;
+
+            // Update the main terrainColors state immediately for local consistency
+            this.terrainColors = { ...this.terrainColors, ...changesToSave };
+
+            // Create an incremental change record
+            const changeRecord = await this.room.collection('terrainColorChange').create({
+                colorChanges: changesToSave,
+                changeCount: changeCount,
+                timestamp: new Date().toISOString()
+            });
+            this.processedColorChangeIds.add(changeRecord.id); // Mark as processed locally
+
+            // Reset stroke changes
+            this.currentStrokeColorChanges = {};
+            this.changesSinceSnapshot++;
+
+            // Periodically create a full snapshot
+            if (this.changesSinceSnapshot >= this.SNAPSHOT_THRESHOLD) {
+                await this.createFullColorSnapshot();
+                this.changesSinceSnapshot = 0; // Reset counter
+            }
+
+            this.showSaveStatus(false);
+            console.log(`Saved ${changeCount} color changes.`);
+
+        } catch (error) {
+            console.error('Error saving color changes:', error);
+            this.showSaveStatus(false, true);
+            // Optionally revert local state or handle error
+            this.currentStrokeColorChanges = {}; // Clear changes on error too
+        }
+    }
+
+    // Applies a full color map (from a snapshot)
+    applyColorSnapshot(snapshotData) {
+        if (!snapshotData || typeof snapshotData !== 'object') {
+            console.error('Invalid color snapshot data:', snapshotData);
+            return false;
+        }
+        console.log("Applying color snapshot...");
+        this.ensureColorAttribute();
+        const colorAttribute = this.geometry.attributes.color;
+        let applied = false;
+        this.terrainColors = { ...snapshotData }; // Replace local state with snapshot
+
+        for (const [vertexIndex, colorHex] of Object.entries(snapshotData)) {
+            const i = parseInt(vertexIndex);
+            if (isNaN(i) || i < 0 || i >= colorAttribute.count) continue;
+            try {
+                const color = new THREE.Color(colorHex);
+                colorAttribute.setXYZ(i, color.r, color.g, color.b);
+                applied = true;
+            } catch (e) {
+                console.warn(`Invalid color hex ${colorHex} at index ${i} in snapshot.`);
+            }
+        }
+
+        if (applied) {
+            colorAttribute.needsUpdate = true;
+            console.log('Applied color snapshot to terrain geometry.');
+        } else {
+            console.warn('No valid color data found in snapshot to apply.');
+        }
+        return applied;
+    }
+
+    // Applies incremental color changes
+    applyIncrementalColorChanges(changeRecords) {
+        if (!changeRecords || changeRecords.length === 0) return;
+
+        console.log(`Applying ${changeRecords.length} incremental color changes.`);
+        this.ensureColorAttribute();
+        const colorAttribute = this.geometry.attributes.color;
+        let modified = false;
+
+        // Sort changes chronologically before applying
+        changeRecords.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+
+        changeRecords.forEach(record => {
+            if (!record.colorChanges || typeof record.colorChanges !== 'object') {
+                console.warn('Skipping invalid color change record:', record.id);
+                return;
+            }
+            if (this.processedColorChangeIds.has(record.id)) {
+                // console.log('Skipping already processed color change:', record.id);
+                return; // Already processed
+            }
+
+            for (const [vertexIndex, colorHex] of Object.entries(record.colorChanges)) {
+                const i = parseInt(vertexIndex);
+                if (isNaN(i) || i < 0 || i >= colorAttribute.count) continue;
+                try {
+                    const color = new THREE.Color(colorHex);
+                    colorAttribute.setXYZ(i, color.r, color.g, color.b);
+                    // Update the main color state as well
+                    this.terrainColors[i] = colorHex;
+                    modified = true;
+                } catch (e) {
+                    console.warn(`Invalid color hex ${colorHex} at index ${i} in change ${record.id}.`);
+                }
+            }
+            this.processedColorChangeIds.add(record.id); // Mark as processed
+        });
+
+        if (modified) {
+            colorAttribute.needsUpdate = true;
+            console.log('Applied incremental color changes to geometry.');
+        }
+    }
+
+    // Load initial color state from database (snapshot + changes)
     async loadColorData() {
         try {
-            this.myUsername = this.room.peers[this.room.clientId].username;
-            
-            // Get all users' color data
-            const userColorRows = await this.room.collection('userColorData').getList();
-            
-            // Debug logging of all color rows and usernames
-            console.log('Current user (colors):', this.myUsername);
-            console.log('All color rows:', userColorRows.map(row => ({
-                id: row.id,
-                username: row.username,
-                changeCount: row.colorData ? Object.keys(row.colorData).length : 0
-            })));
-            
-            // Find this user's row or create if it doesn't exist
-            let userRow = userColorRows.find(row => row.username === this.myUsername);
-            
-            if (userRow) {
-                console.log(`Found existing color row for user ${this.myUsername} with ID ${userRow.id}`);
-                this.userColorRowId = userRow.id;
-                localStorage.setItem('colorUserRowId', userRow.id); // Store in localStorage
+            console.log("Loading color data...");
+            this.ensureColorAttribute(); // Make sure attribute exists before loading
+
+            // 1. Fetch the latest snapshot
+            const snapshots = await this.room.collection('terrainColorSnapshot').getList();
+            let latestSnapshot = null;
+            let snapshotTime = null;
+            if (snapshots.length > 0) {
+                latestSnapshot = snapshots.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+                snapshotTime = new Date(latestSnapshot.created_at);
+                console.log('Applying color snapshot from:', snapshotTime);
+                this.applyColorSnapshot(latestSnapshot.colorData);
+                this.processedColorChangeIds.add(latestSnapshot.id); // Consider snapshot processed
             } else {
-                console.log(`No color row found for user ${this.myUsername}, creating new row`);
-                userRow = await this.room.collection('userColorData').create({
-                    colorData: {},
-                    changeCount: 0,
-                    lastModified: new Date().toISOString()
-                });
-                this.userColorRowId = userRow.id;
-                localStorage.setItem('colorUserRowId', userRow.id); // Store in localStorage
-                console.log(`Created new color row with ID ${this.userColorRowId}`);
+                console.log("No color snapshot found. Starting with default colors.");
+                // Initialize terrainColors with default if no snapshot
+                this.initializeDefaultColors();
             }
-            
-            // Apply all users' color data
-            userColorRows.forEach(row => {
-                if (row.colorData && Object.keys(row.colorData).length > 0) {
-                    this.applyColorDataToTerrain(row.colorData);
+
+            // 2. Fetch incremental changes made *after* the snapshot
+            const allChanges = await this.room.collection('terrainColorChange').getList();
+            let changesToApply = allChanges;
+            if (snapshotTime) {
+                console.log(`Filtering ${allChanges.length} changes after snapshot time ${snapshotTime.toISOString()}`);
+                changesToApply = allChanges.filter(change => {
+                    const changeTime = new Date(change.created_at);
+                    return changeTime > snapshotTime && !this.processedColorChangeIds.has(change.id);
+                });
+            } else {
+                // If no snapshot, apply all changes we haven't processed
+                changesToApply = allChanges.filter(change => !this.processedColorChangeIds.has(change.id));
+            }
+
+
+            if (changesToApply.length > 0) {
+                console.log(`Found ${changesToApply.length} incremental color changes to apply.`);
+                this.applyIncrementalColorChanges(changesToApply);
+            } else {
+                console.log("No new incremental color changes found after snapshot (or no snapshot).");
+            }
+
+
+            // 3. Subscribe to future incremental changes
+            this.room.collection('terrainColorChange').subscribe((incomingChanges) => {
+                const newChanges = incomingChanges.filter(change => !this.processedColorChangeIds.has(change.id));
+                if (newChanges.length > 0) {
+                    console.log(`Received ${newChanges.length} new color changes via subscription.`);
+                    this.applyIncrementalColorChanges(newChanges);
                 }
             });
-            
-            // Subscribe to changes in the userColorData collection
-            this.room.collection('userColorData').subscribe((rows) => {
-                // Process each user's changes
-                rows.forEach(row => {
-                    // Skip our own row as we manage it directly
-                    if (row.id === this.userColorRowId) return;
-                    
-                    // Apply the color changes from other users
-                    if (row.colorData) {
-                        this.applyColorDataToTerrain(row.colorData);
-                    }
-                });
-            });
-            
+
+            console.log("Color data loading process complete.");
+
         } catch (error) {
             console.error('Error loading color data:', error);
         }
     }
 
-    async saveColorChanges() {
-        if (Object.keys(this.colorChanges).length === 0) return;
-        
-        try {
-            this.showSaveStatus(true);
-            
-            // Update our local state
-            this.terrainColors = {...this.terrainColors, ...this.colorChanges};
-            
-            // Save color data to user's row
-            if (this.userColorRowId) {
-                // Get the current user row
-                let userRow = await this.room.collection('userColorData').filter({id: this.userColorRowId}).getList();
-                console.log(`Looking for color row with ID ${this.userColorRowId}`, userRow);
-                
-                if (userRow && userRow.length > 0) {
-                    // Update existing row with merged color changes
-                    const existingColors = userRow[0].colorData || {};
-                    const mergedColors = {...existingColors, ...this.colorChanges};
-                    
-                    console.log(`Updating color row ${this.userColorRowId} for user ${this.myUsername}`);
-                    await this.room.collection('userColorData').update(this.userColorRowId, {
-                        colorData: mergedColors,
-                        changeCount: Object.keys(mergedColors).length,
-                        lastModified: new Date().toISOString()
-                    });
-                } else {
-                    console.warn(`User color row with ID ${this.userColorRowId} not found, creating a new one`);
-                    // Get latest rows to check what's in the database
-                    const allRows = await this.room.collection('userColorData').getList();
-                    console.log('Current color database rows:', allRows.map(r => ({ id: r.id, username: r.username })));
-                    
-                    const newRow = await this.room.collection('userColorData').create({
-                        colorData: this.colorChanges,
-                        changeCount: Object.keys(this.colorChanges).length,
-                        lastModified: new Date().toISOString()
-                    });
-                    this.userColorRowId = newRow.id;
-                    localStorage.setItem('colorUserRowId', newRow.id); // Store in localStorage
-                    console.log(`Created new color row with ID ${this.userColorRowId}`);
-                }
-            } else {
-                // Create a new row for this user
-                const newRow = await this.room.collection('userColorData').create({
-                    colorData: this.colorChanges,
-                    changeCount: Object.keys(this.colorChanges).length,
-                    lastModified: new Date().toISOString()
-                });
-                this.userColorRowId = newRow.id;
-                localStorage.setItem('colorUserRowId', newRow.id); // Store in localStorage
-                console.log(`Created new color row with ID ${this.userColorRowId}`);
-            }
-            
-            // Reset changes after saving
-            const savedChanges = {...this.colorChanges};
-            this.colorChanges = {};
-            
-            this.showSaveStatus(false);
-            return savedChanges;
-        } catch (error) {
-            console.error('Error saving color changes:', error);
-            this.showSaveStatus(false, true);
-            return null;
-        }
-    }
-
-    applyColorDataToTerrain(colorData) {
-        if (!colorData || typeof colorData !== 'object') {
-            console.error('Invalid color data:', colorData);
-            return;
-        }
-        
-        // Store colors locally
-        this.terrainColors = {...this.terrainColors, ...colorData};
-        
-        // Ensure color attribute exists
+    // Helper to set default colors if no data is loaded
+    initializeDefaultColors() {
         this.ensureColorAttribute();
-        
-        // Update colors based on received data
         const colorAttribute = this.geometry.attributes.color;
-        let colorModified = false;
-        
-        for (const [vertexIndex, colorHex] of Object.entries(colorData)) {
-            const i = parseInt(vertexIndex);
-            if (isNaN(i) || i < 0 || i >= colorAttribute.count) continue;
-            
-            // Convert hex to RGB (0-1 range)
-            const color = new THREE.Color(colorHex);
-            colorAttribute.setXYZ(i, color.r, color.g, color.b);
-            colorModified = true;
+        const defaultColor = new THREE.Color(this.colorPalette[0].hex); // Use first palette color
+        this.terrainColors = {}; // Reset local state
+        for (let i = 0; i < colorAttribute.count; i++) {
+            colorAttribute.setXYZ(i, defaultColor.r, defaultColor.g, defaultColor.b);
+            this.terrainColors[i] = this.colorPalette[0].hex;
         }
-        
-        if (colorModified) {
-            colorAttribute.needsUpdate = true;
-            console.log('Applied color data to terrain');
+        colorAttribute.needsUpdate = true;
+        console.log("Initialized terrain with default colors.");
+    }
+
+    // Create a snapshot of the current full color state
+    async createFullColorSnapshot() {
+        try {
+            console.log("Creating full color snapshot...");
+            // Ensure terrainColors is up-to-date (should be handled by apply methods)
+            if (Object.keys(this.terrainColors).length === 0) {
+                console.warn("Skipping color snapshot: No color data available.");
+                return;
+            }
+
+            await this.room.collection('terrainColorSnapshot').create({
+                colorData: this.terrainColors, // Save the complete current state
+                vertexCount: Object.keys(this.terrainColors).length,
+                timestamp: new Date().toISOString()
+            });
+            console.log('Successfully created new color snapshot.');
+
+            // Optional: Clean up old incremental changes (Advanced - requires care)
+            // await this.cleanupOldChanges(new Date()); // Pass snapshot time
+
+        } catch (error) {
+            console.error('Error creating color snapshot:', error);
         }
     }
 
+    // --- Optional Cleanup Logic (Example - Use with caution) ---
+    // async cleanupOldChanges(snapshotTime) {
+    //     console.log("Attempting cleanup of old color changes before:", snapshotTime);
+    //     const changes = await this.room.collection('terrainColorChange').getList();
+    //     const changesToDelete = changes.filter(c => new Date(c.created_at) < snapshotTime && c.username === this.room.peers[this.room.clientId].username);
+
+    //     if (changesToDelete.length > 0) {
+    //         console.log(`Found ${changesToDelete.length} old color changes to delete.`);
+    //         for (const change of changesToDelete) {
+    //             try {
+    //                 // IMPORTANT: You can only delete your own records!
+    //                 await this.room.collection('terrainColorChange').delete(change.id);
+    //                 console.log(`Deleted old color change: ${change.id}`);
+    //                 this.processedColorChangeIds.delete(change.id); // Remove from local cache if present
+    //             } catch (error) {
+    //                 console.error(`Failed to delete old color change ${change.id}:`, error);
+    //                 // If deletion fails (e.g., not owner), stop trying for this record.
+    //             }
+    //         }
+    //     } else {
+    //         console.log("No old color changes found for cleanup.");
+    //     }
+    // }
+
+
+    // Show save status indicator
     showSaveStatus(isVisible, isError = false) {
         if (!this.statusElement) return;
-        
-        this.statusElement.textContent = isError ? 'Error saving changes!' : 'Saving changes...';
+        this.statusElement.textContent = isError ? 'Error saving color!' : 'Saving color...';
         this.statusElement.style.opacity = isVisible ? '1' : '0';
         this.statusElement.style.backgroundColor = isError ? 'rgba(220,53,69,0.7)' : 'rgba(0,0,0,0.7)';
-        
         if (isVisible && !isError) {
+            // Automatically hide after a short delay
             setTimeout(() => {
-                this.statusElement.style.opacity = '0';
+                if (this.statusElement.textContent === 'Saving color...') {
+                    this.statusElement.style.opacity = '0';
+                }
             }, 1500);
         }
     }
