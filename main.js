@@ -65,35 +65,47 @@ controls.maxDistance = 150;
 controls.maxPolarAngle = Math.PI / 2.1;
 controls.target.set(0, 0, 0);
 // Replace the previous zoom configuration with these settings
-controls.zoomSpeed = 0.15; // Much lower zoom speed
-// Add custom zoom handling
-controls.mouseButtons = {
-    LEFT: THREE.MOUSE.ROTATE,
-    MIDDLE: THREE.MOUSE.DOLLY,
-    RIGHT: THREE.MOUSE.PAN
-};
-// Disable default mouse wheel zooming
+controls.zoomSpeed = 0.5;
 controls.enableZoom = true;
+
+// Custom zoom parameters for MMORPG-style zooming
+let zoomState = {
+    current: camera.position.distanceTo(controls.target),
+    min: controls.minDistance,
+    max: controls.maxDistance,
+    speed: 0.08,
+    smoothing: 0.1,
+    target: null
+};
+
+// Override the default wheel zoom behavior
 renderer.domElement.addEventListener('wheel', onMouseWheel, { passive: false });
 
 function onMouseWheel(event) {
     event.preventDefault();
-    // Custom zoom factor calculation with exponential scaling for smoother zoom
-    const zoomFactor = 0.05;
-    // Use deltaY with a small factor and sign-based zoom direction
-    const delta = -Math.sign(event.deltaY) * Math.min(Math.abs(event.deltaY * 0.01), 0.25);
-    // Calculate new distance maintaining constraints
-    const currentDistance = camera.position.distanceTo(controls.target);
-    const newDistance = THREE.MathUtils.clamp(
-        currentDistance * (1 - delta * zoomFactor),
-        controls.minDistance,
-        controls.maxDistance
-    );
-    // Apply the zoom directly to the camera
-    if (newDistance !== currentDistance) {
-        const direction = camera.position.clone().sub(controls.target).normalize();
-        camera.position.copy(controls.target).add(direction.multiplyScalar(newDistance));
+    
+    // Calculate zoom direction and amount
+    const zoomDirection = Math.sign(event.deltaY);
+    
+    // Start from current distance if no target is set
+    if (zoomState.target === null) {
+        zoomState.target = zoomState.current;
     }
+    
+    // Calculate new target zoom level with non-linear scaling for better control
+    // Multiply by distance factor for more natural zooming (slower when close, faster when far)
+    const distanceFactor = Math.max(0.5, Math.min(1.5, zoomState.current / 50));
+    const zoomAmount = zoomDirection * zoomState.speed * distanceFactor;
+    
+    // Calculate zoom target with exponential adjustment for smoother steps
+    zoomState.target *= Math.pow(1.1, zoomAmount);
+    
+    // Clamp target value to min/max constraints
+    zoomState.target = THREE.MathUtils.clamp(
+        zoomState.target,
+        zoomState.min,
+        zoomState.max
+    );
 }
 
 // --- Terrain Editing ---
@@ -294,8 +306,22 @@ function onWindowResize() {
 function animate() {
     requestAnimationFrame(animate);
 
-    controls.update(); // REQUIRED: Required for damping and zoom smoothing from OrbitControls
+    // Apply smooth MMORPG-style zooming if needed
+    if (zoomState.target !== null && Math.abs(zoomState.current - zoomState.target) > 0.01) {
+        // Interpolate current zoom toward target (smoothing)
+        zoomState.current = THREE.MathUtils.lerp(
+            zoomState.current, 
+            zoomState.target, 
+            zoomState.smoothing
+        );
+        
+        // Update camera position based on new distance
+        const direction = camera.position.clone().sub(controls.target).normalize();
+        camera.position.copy(controls.target).add(direction.multiplyScalar(zoomState.current));
+    }
 
+    controls.update(); // Required for damping
+    
     // Update brush indicator visibility based on mouse interaction state potentially
     // (e.g., hide when mouse is up and not over canvas) - current logic keeps it based on raycast hit
 
